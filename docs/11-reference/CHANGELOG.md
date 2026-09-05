@@ -1,13 +1,27 @@
 # Changelog
 
-**Version:** 2.26.3
-**Last Updated:** 2026-09-05
+**Version:** 2.26.4
+**Last Updated:** 2026-09-06
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
+
+---
+
+## Overview
+
+### Version 2.26.4 (2026-09-06)
+
+**Bugfix: settings.VERSION AttributeError**
+
+#### Fixed
+
+1. **`create_swx_app()` references `settings.VERSION` which doesn't exist** — `get_health_checker(version=settings.VERSION)` would crash at startup because `Settings` has no `VERSION` attribute. Changed to `get_health_checker()` which already falls back to importing `__version__` from `swx_core.version`.
+
+### Version 2.26.3 (2026-09-05)
 2. [Version History](#version-history)
 3. [Breaking Changes](#breaking-changes)
 4. [Deprecations](#deprecations)

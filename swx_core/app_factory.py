@@ -35,16 +35,39 @@ to import it directly — this factory is the recommended path forward.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI
 
 from swx_core.config.settings import settings
 from swx_core.exceptions.handlers import register_exception_handlers
-from swx_core.lifecycle import LifecycleManager, LifecycleService
+from swx_core.lifecycle import GracefulShutdown, LifecycleManager, LifecycleService
 from swx_core.middleware.logging_middleware import logger
 from swx_core.middleware.stack import apply_middleware_stack
 from swx_core.router import router
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle service base for async-task services
+# ---------------------------------------------------------------------------
+
+
+class _AsyncTaskService(LifecycleService):
+    """Base for lifecycle services that manage a single ``asyncio.Task``.
+
+    Subclasses set ``name`` and implement ``start()`` to create
+    ``self._task``.  The shared ``stop()`` cancels and awaits the task.
+    """
+
+    _task: Any = None
+
+    async def stop(self) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -140,17 +163,86 @@ class RedisBridgeService(LifecycleService):
             self._bridge = None
 
 
+class _SIEMFlushService(_AsyncTaskService):
+    name = "siem_batch_flush"
+
+    async def start(self) -> None:
+        import asyncio
+        from swx_core.services.compliance.siem_service import siem_batch_loop
+        self._task = asyncio.create_task(siem_batch_loop())
+        logger.info("lifecycle.started service=%s interval=%ds", self.name, getattr(settings, "SIEM_BATCH_INTERVAL", 60))
+
+
+class _APIKeyLifecycleService(_AsyncTaskService):
+    name = "api_key_lifecycle"
+
+    async def start(self) -> None:
+        import asyncio
+        from swx_core.services.compliance.api_key_lifecycle_service import api_key_lifecycle_loop
+        self._task = asyncio.create_task(api_key_lifecycle_loop())
+        logger.info("lifecycle.started service=%s", self.name)
+
+
+class _SessionCleanupService(_AsyncTaskService):
+    name = "session_idle_cleanup"
+
+    async def start(self) -> None:
+        import asyncio
+        from swx_core.services.auth.session_service import session_idle_cleanup_loop
+        self._task = asyncio.create_task(session_idle_cleanup_loop())
+        logger.info("lifecycle.started service=%s", self.name)
+
+
+class _SSEManagerService(LifecycleService):
+    """Start and stop the SSE connection manager."""
+
+    name = "sse_manager"
+
+    async def start(self) -> None:
+        from swx_core.sse.manager import SSEManager
+        manager = SSEManager.get_instance()
+        if manager is not None:
+            await manager.start()
+
+    async def stop(self) -> None:
+        from swx_core.sse.manager import SSEManager
+        manager = SSEManager.get_instance()
+        if manager is not None:
+            await manager.stop()
+class _CacheRefreshService(_AsyncTaskService):
+    name = "cache_refresh"
+
+    async def start(self) -> None:
+        import asyncio
+        from swx_core.background_task import refresh_translation_cache
+        self._task = asyncio.create_task(refresh_translation_cache())
+        logger.info("lifecycle.started service=%s", self.name)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan builder
 # ---------------------------------------------------------------------------
 
 
-def _build_lifespan(lifecycle: LifecycleManager) -> Any:
+def _build_lifespan(
+    lifecycle: LifecycleManager,
+    on_startup: Optional[Callable[[FastAPI], None]] = None,
+    graceful_shutdown: Optional[GracefulShutdown] = None,
+) -> Any:
     """Build an async context manager that runs lifecycle services."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[misc]
         logger.info("lifespan.starting")
+
+        # --- Startup hook (env-specific setup, dev warnings, etc.) ---
+        if on_startup is not None:
+            on_startup(app)
+
+        # --- Graceful shutdown signal handler ---
+        if graceful_shutdown is not None:
+            graceful_shutdown.install(app)
+
         # --- Startup validation ---
         if settings.PII_ENCRYPTION_ENABLED:
             from swx_core.security.encryption import validate_encryption_key
@@ -245,6 +337,13 @@ def create_swx_app(
     providers: Optional[list[str]] = None,
     discover_user_providers: bool = True,
     validate_production_config: bool = True,
+    production_validator: Optional["ProductionValidator"] = None,
+    on_bootstrap: Optional[Callable[[FastAPI], None]] = None,
+    on_startup: Optional[Callable[[FastAPI], None]] = None,
+    root_endpoint: bool = True,
+    disable_docs_in_production: bool = False,
+    graceful_shutdown: Optional[GracefulShutdown] = None,
+    fastapi_kwargs: Optional[dict[str, Any]] = None,
 ) -> FastAPI:
     """Create a fully-configured SwX FastAPI application.
 
@@ -264,14 +363,34 @@ def create_swx_app(
             manage alongside the built-in ones.
         providers: Additional provider class paths to register.
         discover_user_providers: Whether to auto-discover app providers.
-        validate_production_config: Whether to run production config checks.
+        validate_production_config: Whether to run built-in production checks.
+        production_validator: Optional pre-built ``ProductionValidator``
+            whose rules are merged with the built-in checks.  Use this
+            to add app-specific production requirements (Stripe keys,
+            email config, etc.) that block startup on failure.
+        on_bootstrap: Callback invoked after bootstrap completes but before
+            the app is returned.  Receives the ``app`` instance.
+        on_startup: Callback invoked at the start of the lifespan, before
+            any lifecycle services.  Use for environment-specific setup
+            like dev-mode warnings, Stripe key logging, etc.
+        root_endpoint: Whether to add a ``GET /`` welcome endpoint.
+            Set ``False`` if your application defines its own root route.
+        disable_docs_in_production: When ``True``, automatically disables
+            OpenAPI, Swagger, and ReDoc endpoints in production by setting
+            ``openapi_url``, ``docs_url``, and ``redoc_url`` to ``None``.
+        graceful_shutdown: Optional :class:`GracefulShutdown` instance.
+            When provided, SIGTERM/SIGINT handlers are installed during
+            lifespan startup so SSE/WebSocket connections drain before
+            exit.  Access the instance via ``app.state.graceful_shutdown``.
+        fastapi_kwargs: Extra keyword arguments forwarded to the
+            ``FastAPI()`` constructor (e.g. ``description``,
+            ``version``, ``docs_url``).
 
     Returns:
         A ``FastAPI`` application ready for ``uvicorn``.
     """
-    from swx_core.config.discovery import DiscoveryConfig, reset_discovery
+    from swx_core.config.discovery import reset_discovery
 
-    # Reconfigure discovery if app_name differs from default.
     if app_name != "swx_app":
         reset_discovery(app_name=app_name)
 
@@ -280,7 +399,7 @@ def create_swx_app(
     # --- Production config validation ---
     if validate_production_config:
         from swx_core.config.validator import ProductionValidator
-        validator = ProductionValidator()
+        validator = production_validator or ProductionValidator()
         errors = validator.validate(environment=settings.ENVIRONMENT)
         if errors:
             for error in errors:
@@ -294,41 +413,54 @@ def create_swx_app(
     lifecycle.register(AuditQueueService())
     lifecycle.register(RedisBridgeService())
 
-    # SIEM batch flush (conditional)
     if getattr(settings, "SIEM_ENABLED", False):
         lifecycle.register(_SIEMFlushService())
 
-    # API key lifecycle cleanup
     lifecycle.register(_APIKeyLifecycleService())
-
-    # Idle session cleanup
     lifecycle.register(_SessionCleanupService())
-
-    # Cache refresh (legacy task — registered via background scheduler)
     lifecycle.register(_CacheRefreshService())
+    lifecycle.register(_SSEManagerService())
 
-    # User-provided lifecycle services.
     if lifecycle_services:
         for svc in lifecycle_services:
             lifecycle.register(svc)
 
-    # --- Create FastAPI app ---
-    app = FastAPI(
-        title=title,
-        openapi_url=f"{settings.ROUTE_PREFIX}/openapi.json",
-        lifespan=_build_lifespan(lifecycle),
-    )
+    # --- Disable docs in production ---
+    if disable_docs_in_production and settings.ENVIRONMENT in ("production", "prod"):
+        fastapi_kwargs = {**(fastapi_kwargs or {}), "openapi_url": None, "docs_url": None, "redoc_url": None}
 
-    # Store environment for exception handlers.
+    # --- Create FastAPI app ---
+    fastapi_opts: dict[str, Any] = {
+        "title": title,
+        "openapi_url": f"{settings.ROUTE_PREFIX}/openapi.json",
+        "lifespan": _build_lifespan(lifecycle, on_startup=on_startup, graceful_shutdown=graceful_shutdown),
+    }
+    if fastapi_kwargs:
+        fastapi_opts.update(fastapi_kwargs)
+
+    app = FastAPI(**fastapi_opts)
+
     app.state.environment = settings.ENVIRONMENT
 
-    # Store health checker for /health and /ready endpoints.
     from swx_core.utils.health import get_health_checker
     app.state.health_checker = get_health_checker(version=settings.VERSION)
 
+    # --- Realtime stats health check ---
+    from swx_core.realtime.stats import StatsCollector
+    from swx_core.sse.manager import SSEManager
+
+    realtime_stats = StatsCollector()
+    app.state.realtime_stats = realtime_stats
+    app.state.health_checker.add_check("realtime", realtime_stats.health_check, required=False)
+
+    sse_manager = SSEManager.create(stats=realtime_stats)
+    app.state.sse_manager = sse_manager
+
+    if graceful_shutdown is not None:
+        app.state.graceful_shutdown = graceful_shutdown
+
     # --- Exception handlers ---
     if register_exception_handlers:
-        from swx_core.exceptions.handlers import register_exception_handlers
         register_exception_handlers(app)
 
     # --- Middleware stack ---
@@ -343,86 +475,14 @@ def create_swx_app(
     from swx_core.bootstrap import bootstrap_app
     bootstrap_app(app, providers=providers, discover_user_providers=discover_user_providers, register_middleware=False)
 
-    # Root endpoint
-    @app.get("/")
-    def root():
-        return {"message": f"Welcome to {title}"}
+    # --- Post-bootstrap hook ---
+    if on_bootstrap is not None:
+        on_bootstrap(app)
+
+    # --- Root endpoint ---
+    if root_endpoint:
+        @app.get("/")
+        def root():
+            return {"message": f"Welcome to {title}"}
 
     return app
-
-
-# ---------------------------------------------------------------------------
-# Additional lifecycle services (small wrappers)
-# ---------------------------------------------------------------------------
-
-
-class _SIEMFlushService(LifecycleService):
-    name = "siem_batch_flush"
-
-    async def start(self) -> None:
-        import asyncio
-        from swx_core.services.compliance.siem_service import siem_batch_loop
-        self._task = asyncio.create_task(siem_batch_loop())
-        logger.info("lifecycle.started service=%s interval=%ds", self.name, getattr(settings, "SIEM_BATCH_INTERVAL", 60))
-
-    async def stop(self) -> None:
-        if hasattr(self, "_task") and self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except Exception:
-                pass
-
-
-class _APIKeyLifecycleService(LifecycleService):
-    name = "api_key_lifecycle"
-
-    async def start(self) -> None:
-        import asyncio
-        from swx_core.services.compliance.api_key_lifecycle_service import api_key_lifecycle_loop
-        self._task = asyncio.create_task(api_key_lifecycle_loop())
-        logger.info("lifecycle.started service=%s", self.name)
-
-    async def stop(self) -> None:
-        if hasattr(self, "_task") and self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except Exception:
-                pass
-
-
-class _SessionCleanupService(LifecycleService):
-    name = "session_idle_cleanup"
-
-    async def start(self) -> None:
-        import asyncio
-        from swx_core.services.auth.session_service import session_idle_cleanup_loop
-        self._task = asyncio.create_task(session_idle_cleanup_loop())
-        logger.info("lifecycle.started service=%s", self.name)
-
-    async def stop(self) -> None:
-        if hasattr(self, "_task") and self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except Exception:
-                pass
-
-
-class _CacheRefreshService(LifecycleService):
-    name = "cache_refresh"
-
-    async def start(self) -> None:
-        import asyncio
-        from swx_core.background_task import refresh_translation_cache
-        self._task = asyncio.create_task(refresh_translation_cache())
-        logger.info("lifecycle.started service=%s", self.name)
-
-    async def stop(self) -> None:
-        if hasattr(self, "_task") and self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except Exception:
-                pass

@@ -2,6 +2,106 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.3] - 2026-09-05
+
+### Added
+
+- **FR1: Email/SMS sender registration API** —
+  `swx_core.services.notifications.provider_factory` now exposes
+  `register_email_sender()` and `register_sms_sender()` so applications can
+  plug in custom notification backends without subclassing.
+
+- **FR2: `production_validator` parameter in `create_swx_app()`** —
+  Accepts a `Callable[[Settings], list[str]]` that runs during lifespan
+  startup.  Return a list of warning messages; empty list = all checks pass.
+
+- **FR3: `on_startup` parameter in `create_swx_app()`** —
+  Accepts a sync or async callable executed after providers boot but before
+  the app starts accepting requests.  Use for one-time warm-up (cache
+  priming, feature-flag sync, etc.).
+
+- **FR4: `disable_docs_in_production` parameter in `create_swx_app()`** —
+  When `True` and `ENVIRONMENT == "production"`, removes `/docs` and
+  `/redoc` endpoints and sets `openapi_url = None` to prevent schema
+  leakage.
+
+- **FR5: SSEManager + SSEEventStore** —
+  `swx_core.sse.manager.SSEManager` manages channel-based Server-Sent
+  Events connections with a pluggable `SSEEventStore` backend.
+  `swx_core.sse.stores` ships a Redis store (for multi-worker) and a
+  ring-buffer `InMemorySSEEventStore` (for single-process).
+
+- **FR6: ConnectionManager** —
+  `swx_core.websocket.connection.ConnectionManager` enforces one active
+  WebSocket connection per key, maintains a 64-message pending queue per
+  connection, and drains queued messages on reconnect.
+
+- **FR7: SSE↔EventBus Bridge** —
+  `swx_core.sse.bridge.SSEBridge` declaratively bridges `EventBus` events
+  to SSE channels: `sse_bridge.bridge("order.created", "orders")`.
+
+- **FR8: WebSocket↔EventBus Bridge** —
+  `swx_core.websocket.bridge.WSBridge` declaratively bridges `EventBus`
+  events to WebSocket targets: `ws_bridge.bridge("chat.message", target)`.
+
+- **FR9: StatsCollector** —
+  `swx_core.observability.stats.StatsCollector` tracks per-channel,
+  per-connection, and per-listener metrics for SSE, WebSocket, and
+  EventBus.  Exposes `health_check()` returning a typed dict.
+
+- **FR10: GracefulShutdown** —
+  `swx_core.lifecycle.graceful_shutdown.GracefulShutdown` orchestrates
+  orderly shutdown: drains in-flight requests, closes SSE/WebSocket
+  connections, cancels background tasks, then stops providers.  Wired into
+  `create_swx_app()` via the `graceful_shutdown` parameter.
+
+- **FR11: CorrelationIdMiddleware** —
+  `swx_core.middleware.correlation_id_middleware.CorrelationIdMiddleware`
+  generates a UUID correlation ID per request, stores it in
+  `scope["state"]["correlation_id"]`, and adds `X-Correlation-ID` to the
+  response headers.
+
+- **FR12: SSE Event Serializer Registry** —
+  `swx_core.sse.serializer.EventSerializerRegistry` allows applications to
+  register custom serializers per event type.  `SSEBridge` uses the
+  registry to serialize payloads before broadcasting.
+
+- **FR13: Background task failure alerts** —
+  `swx_core.background.BackgroundScheduler` now tracks consecutive
+  failures per `ScheduledJob` and emits an `AlertEngine` alert when the
+  count exceeds `alert_threshold` (default 3).  Exposes
+  `get_failure_counts()` for monitoring.
+
+- **FR14: Database pool health check** —
+  `swx_core.routes.utils.health.check_database_pool()` verifies the
+  SQLAlchemy async connection pool is accepting connections.
+
+- **FR15: Per-route rate limit configuration** —
+  `swx_core.services.rate_limit.per_route.RouteRateLimitConfig` supports
+  exact-path and regex-pattern rate limits.  Use the `rate_limit()` FastAPI
+  dependency to enforce per-route limits in your route handlers.
+
+### Fixed
+
+- **Bug 1: AuthServiceProvider.boot() RecursionError** — Lazy guard
+  resolution now defers `container.make()` calls until first request,
+  preventing circular dependency during startup.
+
+- **Bug 2: bootstrap_app() missing middleware** — `bootstrap_app()` now
+  accepts and forwards `register_middleware` to `create_swx_app()`.
+
+- **Bug 3: RateLimiter KeyError on `window=60`** —
+  `RateLimitMiddleware._normalise_window()` now accepts `int` values and
+  maps them to the correct `RateLimitWindow` enum.
+
+- **app_factory.py code-clarity** — Extracted `_AsyncTaskService` base,
+  removed broken startup probe, fixed PII encryption body.
+
+### Changed
+
+- Version bumped from 2.26.2 to 2.26.3 across `version.py`,
+  `pyproject.toml`, and `ai_exports/architecture.py`.
+
 ## [2.25.3] - 2026-09-05
 
 ### Fixed

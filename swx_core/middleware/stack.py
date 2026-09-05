@@ -50,6 +50,11 @@ def _apply_security_headers(app: FastAPI) -> None:
     apply_middleware(app)
 
 
+def _apply_correlation_id(app: FastAPI) -> None:
+    from swx_core.middleware.correlation_id_middleware import CorrelationIdMiddleware
+    app.add_middleware(CorrelationIdMiddleware)
+
+
 def _apply_audit(app: FastAPI) -> None:
     from swx_core.middleware.audit_middleware import apply_middleware
     apply_middleware(app)
@@ -131,6 +136,7 @@ class MiddlewareSpec:
 CANONICAL_ORDER: list[MiddlewareSpec] = [
     MiddlewareSpec(name="cors", apply_fn=_apply_cors, order=10),
     MiddlewareSpec(name="security_headers", apply_fn=_apply_security_headers, order=20),
+    MiddlewareSpec(name="correlation_id", apply_fn=_apply_correlation_id, order=25),
     MiddlewareSpec(name="audit", apply_fn=_apply_audit, order=30),
     MiddlewareSpec(name="logging", apply_fn=_apply_logging, order=40),
     MiddlewareSpec(name="rate_limit", apply_fn=_apply_rate_limit, order=50),

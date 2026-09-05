@@ -408,3 +408,310 @@ from swx_core.container.container import Container, get_container
 # Also works:
 from swx_core.container.binding import BindingType
 ```
+
+---
+
+## 10. Real-Time Infrastructure (v2.26.3)
+
+### SSE Manager
+
+**Module:** `swx_core.sse.manager`
+
+Channel-based Server-Sent Events with pluggable event store backends.
+
+```python
+from swx_core.sse.manager import SSEManager
+from swx_core.sse.stores import InMemorySSEEventStore
+
+manager = SSEManager(store=InMemorySSEEventStore(max_events=100))
+
+# Add a client to a channel
+queue = await manager.subscribe("orders")
+
+# Broadcast to all subscribers on a channel
+await manager.broadcast("orders", {"event": "order.created", "data": {...}})
+
+# Disconnect a client
+await manager.unsubscribe("orders", client_id)
+```
+
+For multi-worker deployments, use `RedisSSEEventStore`:
+
+```python
+from swx_core.sse.stores import RedisSSEEventStore
+
+manager = SSEManager(store=RedisSSEEventStore(redis_url="redis://localhost"))
+```
+
+### SSE↔EventBus Bridge
+
+**Module:** `swx_core.sse.bridge`
+
+Declaratively bridge `EventBus` events to SSE channels.
+
+```python
+from swx_core.sse.bridge import sse_bridge
+
+# Bridge an event type to an SSE channel
+sse_bridge.bridge("order.created", "orders")
+sse_bridge.bridge("payment.received", "payments")
+
+# Start/stop with app lifecycle
+await sse_bridge.start()
+await sse_bridge.stop()
+```
+
+### SSE Event Serializer Registry
+
+**Module:** `swx_core.sse.serializer`
+
+Register custom serializers per event type for SSE payloads.
+
+```python
+from swx_core.sse.serializer import sse_serializers
+
+# Register a custom serializer
+sse_serializers.register("order.created", lambda data: {
+    "event": "order_created",
+    "id": data["id"],
+    "total": f"${data['total']:.2f}",
+})
+
+# Serialize an event payload
+payload = sse_serializers.serialize("order.created", {"id": 123, "total": 49.99})
+
+# Unregister when no longer needed
+sse_serializers.unregister("order.created")
+```
+
+### WebSocket Connection Manager
+
+**Module:** `swx_core.websocket.manager`
+
+Single-connection-per-key enforcement with pending message queue.
+
+```python
+from swx_core.websocket.manager import ConnectionManager
+
+manager = ConnectionManager()
+
+# Accept a connection (replaces any existing connection for the same key)
+await manager.connect("user:42", websocket)
+
+# Send a message (queues if client is temporarily disconnected)
+await manager.send("user:42", {"type": "chat", "text": "Hello"})
+
+# Disconnect
+await manager.disconnect("user:42")
+```
+
+### WebSocket↔EventBus Bridge
+
+**Module:** `swx_core.websocket.bridge`
+
+Declaratively bridge `EventBus` events to WebSocket targets.
+
+```python
+from swx_core.websocket.bridge import ws_bridge
+
+# Bridge an event type to a WebSocket target
+ws_bridge.bridge("chat.message", target="user:{sender_id}")
+ws_bridge.bridge("system.alert", target="broadcast")
+
+await ws_bridge.start()
+await ws_bridge.stop()
+```
+
+### StatsCollector
+
+**Module:** `swx_core.realtime.stats`
+
+Per-channel, per-connection, and per-listener metrics for SSE, WebSocket, and EventBus.
+
+```python
+from swx_core.realtime.stats import StatsCollector
+
+stats = StatsCollector()
+
+# Record events
+stats.record_sse_broadcast("orders", events_count=1)
+stats.record_ws_message("user:42", direction="outgoing")
+
+# Health check
+health = stats.health_check()
+# {"sse": {"channels": 3, "active_connections": 12}, "ws": {...}, ...}
+```
+
+---
+
+## 11. Observability (v2.26.3)
+
+### Correlation ID Middleware
+
+**Module:** `swx_core.middleware.correlation_id_middleware`
+
+Generates a UUID correlation ID per request, stored in `scope["state"]["correlation_id"]` and added as `X-Correlation-ID` to the response.
+
+```python
+from swx_core.middleware.correlation_id_middleware import CorrelationIdMiddleware
+
+app.add_middleware(CorrelationIdMiddleware)
+
+# Access in a route handler:
+async def my_route(request: Request):
+    correlation_id = request.scope["state"]["correlation_id"]
+    ...
+```
+
+### Database Pool Health Check
+
+**Module:** `swx_core.routes.utils.health`
+
+Verifies the SQLAlchemy async connection pool is accepting connections.
+
+```python
+from swx_core.routes.utils.health import check_database_pool
+
+result = await check_database_pool()
+# {"status": "healthy", "pool_size": 5, "checked_out": 2}
+```
+
+---
+
+## 12. Graceful Shutdown (v2.26.3)
+
+**Module:** `swx_core.lifecycle.graceful_shutdown`
+
+Orchestrates orderly shutdown: drains in-flight requests, closes SSE/WebSocket connections, cancels background tasks, then stops providers.
+
+```python
+from swx_core.lifecycle.graceful_shutdown import GracefulShutdown
+
+shutdown = GracefulShutdown(timeout=30.0)  # seconds to wait for drain
+
+# Install in app
+app = create_swx_app(graceful_shutdown=shutdown)
+
+# Or manually:
+shutdown.install(app)
+
+# Access from app state:
+shutdown = app.state.graceful_shutdown
+```
+
+Wired into `create_swx_app()` automatically. No additional configuration needed unless you want custom timeout.
+
+---
+
+## 13. Production Hardening (v2.26.3)
+
+### Disable Docs in Production
+
+Prevents OpenAPI schema leakage in production environments.
+
+```python
+app = create_swx_app(disable_docs_in_production=True)
+```
+
+When `ENVIRONMENT=production`, `/docs` and `/redoc` return 404 and `openapi_url` is set to `None`.
+
+### Production Validator
+
+Custom startup validation that runs during lifespan startup.
+
+```python
+def validate_my_config(settings) -> list[str]:
+    warnings = []
+    if not settings.STRIPE_API_KEY:
+        warnings.append("STRIPE_API_KEY is required for billing")
+    return warnings
+
+app = create_swx_app(production_validator=validate_my_config)
+```
+
+### On-Startup Hook
+
+One-time warm-up code executed after providers boot but before the app accepts requests.
+
+```python
+async def warm_up():
+    await prime_cache()
+    await sync_feature_flags()
+
+app = create_swx_app(on_startup=warm_up)
+```
+
+---
+
+## 14. Background Task Failure Alerts (v2.26.3)
+
+**Module:** `swx_core.background`
+
+`BackgroundScheduler` now tracks consecutive failures per `ScheduledJob` and emits alerts via `AlertEngine` when the count exceeds `alert_threshold` (default 3).
+
+```python
+from swx_core.background import background
+
+# Register with custom alert threshold
+background.register(
+    name="critical_sync",
+    handler=critical_sync,
+    interval=30,
+    alert_threshold=2,  # alert after 2 consecutive failures
+)
+
+# Check failure counts for monitoring
+counts = background.get_failure_counts()
+# {"critical_sync": 3, "cache_refresh": 0}
+```
+
+---
+
+## 15. Per-Route Rate Limiting (v2.26.3)
+
+**Module:** `swx_core.services.rate_limit.per_route`
+
+Exact-path and regex-pattern rate limits applied via FastAPI dependency.
+
+```python
+from swx_core.services.rate_limit.per_route import route_limits, rate_limit
+from fastapi import APIRouter, Depends
+
+# --- Style 1: Bulk registration at app startup ---
+route_limits.configure({
+    "/api/search": {"get": "100/hour"},
+    "/api/detect/public": {"post": "5/minute"},
+})
+
+# --- Style 2: Decorator/dependency on individual routes ---
+router = APIRouter()
+
+@router.post("/api/detect/public", dependencies=[Depends(rate_limit("5/minute", namespace="detection:detect:public"))])
+async def detect_public(request: Request):
+    ...
+
+@router.get("/api/search", dependencies=[Depends(rate_limit("100/hour", namespace="search:query"))])
+async def search(q: str):
+    ...
+```
+
+---
+
+## 16. Email/SMS Sender Registration (v2.26.3)
+
+**Module:** `swx_core.services.notifications.provider_factory`
+
+Register custom email and SMS sender backends without subclassing.
+
+```python
+from swx_core.services.notifications.provider_factory import (
+    register_email_sender,
+    register_sms_sender,
+)
+
+# Register a custom email sender
+register_email_sender("sendgrid", SendGridEmailSender)
+
+# Register a custom SMS sender
+register_sms_sender("twilio", TwilioSMSSender)
+```

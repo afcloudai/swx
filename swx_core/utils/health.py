@@ -191,6 +191,79 @@ async def check_database() -> HealthStatus:
             message=f"Database connection failed: {str(e)}",
         )
 
+
+async def check_database_pool() -> HealthStatus:
+    """Check database pool utilization and checkout latency.
+
+    Returns ``"degraded"`` when pool utilization exceeds 80% or
+    checkout latency exceeds 500 ms — early warning before connections
+    are exhausted.
+    """
+    try:
+        from swx_core.database.db import async_engine
+    except ImportError:
+        return HealthStatus(
+            name="database_pool",
+            status="degraded",
+            message="Database engine not available",
+        )
+
+    pool = async_engine.pool
+    pool_size = pool.size() if hasattr(pool, 'size') else 0
+    checked_out = pool.checkedout() if hasattr(pool, 'checkedout') else 0
+    overflow = pool.overflow() if hasattr(pool, 'overflow') else 0
+
+    utilization = (checked_out / pool_size) if pool_size > 0 else 0.0
+
+    # Measure checkout latency.
+    import time
+    start = time.monotonic()
+    try:
+        async with get_session() as session:
+            await session.execute("SELECT 1")
+    except Exception as exc:
+        return HealthStatus(
+            name="database_pool",
+            status="unhealthy",
+            message=f"Database checkout failed: {exc}",
+            details={"pool_size": pool_size, "checked_out": checked_out, "overflow": overflow},
+        )
+    latency_ms = round((time.monotonic() - start) * 1000, 2)
+
+    details = {
+        "pool_size": pool_size,
+        "checked_out": checked_out,
+        "overflow": overflow,
+        "utilization_pct": round(utilization * 100, 1),
+        "checkout_latency_ms": latency_ms,
+    }
+
+    if utilization > 0.8:
+        return HealthStatus(
+            name="database_pool",
+            status="degraded",
+            message=f"Pool utilization {utilization:.0%} exceeds 80% threshold",
+            details=details,
+            latency_ms=latency_ms,
+        )
+
+    if latency_ms > 500:
+        return HealthStatus(
+            name="database_pool",
+            status="degraded",
+            message=f"Checkout latency {latency_ms}ms exceeds 500ms threshold",
+            details=details,
+            latency_ms=latency_ms,
+        )
+
+    return HealthStatus(
+        name="database_pool",
+        status="healthy",
+        message=f"Pool OK ({checked_out}/{pool_size} connections, {latency_ms}ms checkout)",
+        details=details,
+        latency_ms=latency_ms,
+    )
+
 async def check_redis(redis_url: str = "redis://localhost:6379") -> HealthStatus:
     """Check Redis connectivity."""
     try:
@@ -338,7 +411,8 @@ def get_health_checker(version: str = None) -> HealthChecker:
         
         # Add default checks
         _default_health_checker.add_check("database", check_database)
-        _default_health_checker.add_check("redis", check_redis)
+        _default_health_checker.add_check("database_pool", check_database_pool, required=False)
+        _default_health_checker.add_check("redis", check_redis, required=False)
     
     return _default_health_checker
 
@@ -362,6 +436,7 @@ def setup_health_checker(
     
     # Add default checks
     checker.add_check("database", check_database)
+    checker.add_check("database_pool", check_database_pool, required=False)
     checker.add_check("redis", check_redis, required=False)
     
     # Add custom checks

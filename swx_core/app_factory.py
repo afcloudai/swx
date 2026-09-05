@@ -34,6 +34,8 @@ to import it directly — this factory is the recommended path forward.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from contextlib import asynccontextmanager
 from typing import Any, Callable, Optional
 
@@ -226,7 +228,7 @@ class _CacheRefreshService(_AsyncTaskService):
 
 def _build_lifespan(
     lifecycle: LifecycleManager,
-    on_startup: Optional[Callable[[FastAPI], None]] = None,
+    on_startup: Optional[Callable[[FastAPI], Any]] = None,
     graceful_shutdown: Optional[GracefulShutdown] = None,
 ) -> Any:
     """Build an async context manager that runs lifecycle services."""
@@ -237,7 +239,9 @@ def _build_lifespan(
 
         # --- Startup hook (env-specific setup, dev warnings, etc.) ---
         if on_startup is not None:
-            on_startup(app)
+            result = on_startup(app)
+            if inspect.isawaitable(result):
+                await result
 
         # --- Graceful shutdown signal handler ---
         if graceful_shutdown is not None:
@@ -331,7 +335,7 @@ def create_swx_app(
     *,
     register_routes: bool = True,
     register_middleware: bool = True,
-    register_exception_handlers: bool = True,
+    install_exception_handlers: bool = True,
     middleware_overrides: Optional[dict[str, bool]] = None,
     lifecycle_services: Optional[list[LifecycleService]] = None,
     providers: Optional[list[str]] = None,
@@ -339,7 +343,7 @@ def create_swx_app(
     validate_production_config: bool = True,
     production_validator: Optional["ProductionValidator"] = None,
     on_bootstrap: Optional[Callable[[FastAPI], None]] = None,
-    on_startup: Optional[Callable[[FastAPI], None]] = None,
+    on_startup: Optional[Callable[[FastAPI], Any]] = None,
     root_endpoint: bool = True,
     disable_docs_in_production: bool = False,
     graceful_shutdown: Optional[GracefulShutdown] = None,
@@ -357,7 +361,7 @@ def create_swx_app(
             runtime configuration.
         register_routes: Whether to include auto-discovered routes.
         register_middleware: Whether to apply the canonical middleware stack.
-        register_exception_handlers: Whether to register standard handlers.
+        install_exception_handlers: Whether to register standard handlers.
         middleware_overrides: Per-middleware enable/disable overrides.
         lifecycle_services: Additional ``LifecycleService`` instances to
             manage alongside the built-in ones.
@@ -370,9 +374,11 @@ def create_swx_app(
             email config, etc.) that block startup on failure.
         on_bootstrap: Callback invoked after bootstrap completes but before
             the app is returned.  Receives the ``app`` instance.
+            **Must be synchronous** — called outside the async lifespan.
         on_startup: Callback invoked at the start of the lifespan, before
-            any lifecycle services.  Use for environment-specific setup
-            like dev-mode warnings, Stripe key logging, etc.
+            any lifecycle services.  Receives the ``app`` instance.
+            May be sync or async — if it returns an awaitable, it will
+            be awaited.
         root_endpoint: Whether to add a ``GET /`` welcome endpoint.
             Set ``False`` if your application defines its own root route.
         disable_docs_in_production: When ``True``, automatically disables
@@ -460,7 +466,7 @@ def create_swx_app(
         app.state.graceful_shutdown = graceful_shutdown
 
     # --- Exception handlers ---
-    if register_exception_handlers:
+    if install_exception_handlers:
         register_exception_handlers(app)
 
     # --- Middleware stack ---

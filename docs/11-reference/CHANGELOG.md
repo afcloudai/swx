@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.4
+**Version:** 2.26.5
 **Last Updated:** 2026-09-06
 
 ---
@@ -13,13 +13,23 @@
 
 ## Overview
 
+### Version 2.26.5 (2026-09-06)
+
+**Bugfix: parameter shadowing and async on_startup**
+
+#### Fixed
+
+1. **`register_exception_handlers` parameter shadows imported function** — The `register_exception_handlers: bool` parameter in `create_swx_app()` shadowed the imported `register_exception_handlers()` function, causing `TypeError: 'bool' object is not callable` at startup. Renamed the parameter to `install_exception_handlers`.
+
+2. **`on_startup` does not await async callables** — `on_startup` was called synchronously, so passing an `async def` would silently return an unawaited coroutine. Now detects and awaits async callables. Type annotation broadened to `Callable[[FastAPI], Any]`.
+
 ### Version 2.26.4 (2026-09-06)
 
 **Bugfix: settings.VERSION AttributeError**
 
 #### Fixed
 
-1. **`create_swx_app()` references `settings.VERSION` which doesn't exist** — `get_health_checker(version=settings.VERSION)` would crash at startup because `Settings` has no `VERSION` attribute. Changed to `get_health_checker()` which already falls back to importing `__version__` from `swx_core.version`.
+1. **`create_swx_app()` references `settings.VERSION` which doesn't exist** — `get_health_checker(version=settings.VERSION)` would crash at startup. Changed to `get_health_checker()` which already resolves version from `swx_core.__version__`.
 
 ### Version 2.26.3 (2026-09-05)
 2. [Version History](#version-history)

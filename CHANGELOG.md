@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.5] - 2026-09-06
+
+### Fixed
+
+- **Bug: `register_exception_handlers` parameter shadows imported function** —
+  The `register_exception_handlers: bool` parameter in `create_swx_app()`
+  shadowed the imported `register_exception_handlers()` function from
+  `swx_core.exceptions.handlers`, causing `TypeError: 'bool' object is not
+  callable` at startup. Renamed the parameter to `install_exception_handlers`
+  to eliminate the shadow.
+
+- **Bug: `on_startup` does not await async callables** —
+  `on_startup` was typed as `Callable[[FastAPI], None]` and called
+  synchronously, so passing an `async def` function would silently return an
+  unawaited coroutine. Now uses `inspect.isawaitable()` to detect and await
+  async callables inside the lifespan. Type annotation broadened to
+  `Callable[[FastAPI], Any]`.
+
 ## [2.26.4] - 2026-09-06
 
 ### Fixed

@@ -443,7 +443,7 @@ def create_swx_app(
     app.state.environment = settings.ENVIRONMENT
 
     from swx_core.utils.health import get_health_checker
-    app.state.health_checker = get_health_checker(version=settings.VERSION)
+    app.state.health_checker = get_health_checker()
 
     # --- Realtime stats health check ---
     from swx_core.realtime.stats import StatsCollector

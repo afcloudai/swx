@@ -17,6 +17,7 @@ Typical usage in a FastAPI route::
 
     ws_mgr = ConnectionManager()
 
+    # Basic: let the manager accept the connection
     @router.websocket("/ws/{device_id}")
     async def ws_endpoint(websocket: WebSocket, device_id: str):
         await ws_mgr.connect(device_id, websocket)
@@ -28,6 +29,14 @@ Typical usage in a FastAPI route::
             pass
         finally:
             await ws_mgr.disconnect(device_id)
+
+    # Advanced: accept yourself (e.g. after auth) then pass accept=False
+    @router.websocket("/ws/{device_id}")
+    async def ws_endpoint(websocket: WebSocket, device_id: str):
+        await websocket.accept()                     # accept early
+        user = await authenticate(websocket)         # custom auth
+        await ws_mgr.connect(device_id, websocket, accept=False)  # skip accept
+        ...
 """
 
 from __future__ import annotations
@@ -72,20 +81,26 @@ class ConnectionManager:
         self._stats = stats
         self._max_pending = max_pending
         self._connections: Dict[str, _Connection] = {}
+        self._disconnected_pending: Dict[str, Deque[str]] = {}
         self._metrics = _ConnectionMetrics()
 
     # ------------------------------------------------------------------
     # Connect / Disconnect
     # ------------------------------------------------------------------
 
-    async def connect(self, key: str, websocket: WebSocket) -> None:
-        """Accept *websocket* and register it under *key*.
+    async def connect(self, key: str, websocket: WebSocket, *, accept: bool = True) -> None:
+        """Register *websocket* under *key*.
 
-        If a connection already exists for *key*, it is replaced (the
-        old socket is closed).  Pending messages are drained to the new
-        connection.
+        If *accept* is ``True`` (the default), ``await websocket.accept()`` is
+        called before registration.  Pass ``accept=False`` when the caller has
+        already accepted the WebSocket — for example, after authenticating the
+        connection in an auth middleware.
+
+        If a connection already exists for *key*, it is replaced (the old
+        socket is closed).  Pending messages are drained to the new connection.
         """
-        await websocket.accept()
+        if accept:
+            await websocket.accept()
 
         existing = self._connections.get(key)
         if existing is not None:
@@ -97,6 +112,13 @@ class ConnectionManager:
 
         conn = _Connection(websocket=websocket)
         self._connections[key] = conn
+
+        # Transfer disconnected-pending messages to the new connection.
+        pending = self._disconnected_pending.pop(key, None)
+        if pending:
+            for msg in pending:
+                conn.pending.append(msg)
+
         self._metrics.opened += 1
 
         if self._stats:
@@ -109,10 +131,20 @@ class ConnectionManager:
         logger.info("ws.connected key=%s total=%d", key, len(self._connections))
 
     async def disconnect(self, key: str) -> None:
-        """Remove the connection for *key* (best-effort close)."""
+        """Remove the connection for *key* (best-effort close).
+
+        Pending messages on the connection are preserved in a
+        disconnected-pending buffer so they can be drained on reconnect.
+        """
         conn = self._connections.pop(key, None)
         if conn is None:
             return
+
+        # Preserve any undrained pending messages for drain-on-reconnect.
+        if conn.pending:
+            self._disconnected_pending[key] = conn.pending
+        else:
+            self._disconnected_pending.pop(key, None)
 
         try:
             await conn.websocket.close()
@@ -217,8 +249,8 @@ class ConnectionManager:
         conn = self._connections.get(key)
         if conn is not None:
             return len(conn.pending)
-        # Disconnected key — pending stored in _disconnected_pending if we tracked it.
-        return 0
+        buf = self._disconnected_pending.get(key)
+        return len(buf) if buf is not None else 0
 
     # ------------------------------------------------------------------
     # Internals
@@ -228,6 +260,9 @@ class ConnectionManager:
         conn = self._connections.get(key)
         if conn is not None:
             conn.pending.append(message)
+        else:
+            buf = self._disconnected_pending.setdefault(key, deque(maxlen=self._max_pending))
+            buf.append(message)
         self._metrics.queued += 1
 
     async def _drain_pending(self, key: str, conn: _Connection) -> int:

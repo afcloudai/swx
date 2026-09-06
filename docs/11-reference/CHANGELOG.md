@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.6
+**Version:** 2.26.8
 **Last Updated:** 2026-09-06
 
 ---
@@ -12,6 +12,28 @@
 ---
 
 ## Overview
+
+### Version 2.26.8 (2026-09-06)
+
+**Bugfix: bridge unbridge handler mismatch, disconnected pending queue loss**
+
+#### Fixed
+
+1. **`SSEBridge.unbridge()` / `WSBridge.unbridge()` — handler reference mismatch** — `unbridge()` passed a new `_noop` async function to `EventBus.forget()`, but `forget()` matches handlers by identity. The `_noop` never matched the original `_handler` closure, so `unbridge()` was a no-op. Changed `_registrations` to store `(event, handler)` tuples so `unbridge()` passes the exact handler reference to `forget()`.
+
+2. **`ConnectionManager._queue_pending()` silently drops messages for disconnected keys** — When `send()` was called for a disconnected key, `_queue_pending()` looked up `_connections.get(key)` which returned `None` after `disconnect()` removed the entry, so the message was silently discarded. Added `_disconnected_pending: Dict[str, Deque[str]]` that persists across disconnects. Messages queued for offline keys are now correctly drained on reconnect.
+
+3. **`ConnectionManager.disconnect()` discards pending messages** — `disconnect()` popped the `_Connection` object, destroying its `pending` deque. Now transfers the pending deque to `_disconnected_pending` before closing the socket.
+
+4. **Missing blank line between top-level classes in `app_factory.py`** — Added PEP 8 required two blank lines between `_SSEManagerService` and `_CacheRefreshService`.
+
+### Version 2.26.7 (2026-09-06)
+
+**Bugfix: ConnectionManager.connect() unconditional websocket.accept()**
+
+#### Fixed
+
+1. **`ConnectionManager.connect()` calls `websocket.accept()` unconditionally** — Added `accept: bool = True` keyword-only argument so callers that accept the WebSocket themselves can pass `accept=False` to skip the duplicate call.
 
 ### Version 2.26.6 (2026-09-06)
 

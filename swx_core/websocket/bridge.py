@@ -69,6 +69,9 @@ class WSBridge:
             target: Either a static connection key string, or a callable
                 that receives the ``Event`` and returns a key string.
             priority: Listener priority (default 50).
+
+        Returns:
+            ``self``, for chaining.
         """
         listener_name = f"WSBridge[{event}]"
 
@@ -92,21 +95,18 @@ class WSBridge:
                     await self._stats.listener_error(listener_name)
 
         self._bus.listen(event, _handler, priority=priority)
-        self._registrations[listener_name] = event
+        self._registrations[listener_name] = (event, _handler)
         logger.info("ws.bridge_registered event=%s → target=%s", event, target if isinstance(target, str) else "<dynamic>")
 
     def unbridge(self, event: str) -> bool:
         """Remove a previously registered bridge for *event*."""
         listener_name = f"WSBridge[{event}]"
-        if listener_name not in self._registrations:
+        entry = self._registrations.pop(listener_name, None)
+        if entry is None:
             return False
 
-        registered_event = self._registrations.pop(listener_name)
-
-        async def _noop(ev: Event) -> None:
-            pass
-
-        self._bus.forget(registered_event, _noop)
+        registered_event, handler = entry
+        self._bus.forget(registered_event, handler)
         logger.info("ws.bridge_removed event=%s", event)
         return True
 

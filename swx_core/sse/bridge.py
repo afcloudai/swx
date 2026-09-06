@@ -74,6 +74,9 @@ class SSEBridge:
             priority: Listener priority (default 50).
             event_type: Optional SSE ``event:`` field value.  When
                 ``None``, the EventBus event name is used.
+
+        Returns:
+            ``self``, for chaining.
         """
         listener_name = f"SSEBridge[{event}]"
 
@@ -99,21 +102,18 @@ class SSEBridge:
                     await self._stats.listener_error(listener_name)
 
         self._bus.listen(event, _handler, priority=priority)
-        self._registrations[listener_name] = event
+        self._registrations[listener_name] = (event, _handler)
         logger.info("sse.bridge_registered event=%s → channel=%s", event, channel if isinstance(channel, str) else "<dynamic>")
 
     def unbridge(self, event: str) -> bool:
         """Remove a previously registered bridge for *event*."""
         listener_name = f"SSEBridge[{event}]"
-        if listener_name not in self._registrations:
+        entry = self._registrations.pop(listener_name, None)
+        if entry is None:
             return False
 
-        registered_event = self._registrations.pop(listener_name)
-
-        async def _noop(ev: Event) -> None:
-            pass
-
-        self._bus.forget(registered_event, _noop)
+        registered_event, handler = entry
+        self._bus.forget(registered_event, handler)
         logger.info("sse.bridge_removed event=%s", event)
         return True
 

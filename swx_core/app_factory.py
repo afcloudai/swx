@@ -211,6 +211,8 @@ class _SSEManagerService(LifecycleService):
         manager = SSEManager.get_instance()
         if manager is not None:
             await manager.stop()
+
+
 class _CacheRefreshService(_AsyncTaskService):
     name = "cache_refresh"
 

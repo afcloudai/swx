@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.8] - 2026-09-06
+
+### Fixed
+
+- **Bug: `SSEBridge.unbridge()` / `WSBridge.unbridge()` — handler reference mismatch** —
+  `unbridge()` created a new `_noop` async function and passed it to
+  `EventBus.forget()`, but `forget()` matches handlers by identity. The `_noop`
+  never matched the original `_handler` closure, so `unbridge()` was a no-op
+  and the listener stayed registered forever. Changed `_registrations` to store
+  `(event, handler)` tuples so `unbridge()` passes the exact handler reference
+  to `forget()`.
+
+- **Bug: `ConnectionManager._queue_pending()` silently drops messages for disconnected keys** —
+  When `send()` was called for a disconnected key, `_queue_pending()` looked up
+  `_connections.get(key)` which returned `None` after `disconnect()` removed the
+  entry, so the message was silently discarded despite incrementing the `queued`
+  metric. Added `_disconnected_pending: Dict[str, Deque[str]]` that persists
+  across disconnects. Messages queued for offline keys are now correctly drained
+  on reconnect.
+
+- **Bug: `ConnectionManager.disconnect()` discards pending messages** —
+  `disconnect()` popped the `_Connection` object, destroying its `pending` deque.
+  Any undrained messages were lost. Now `disconnect()` transfers the pending deque
+  to `_disconnected_pending` before closing the socket.
+
+- **Style: Missing blank line between top-level classes in `app_factory.py`** —
+  Added PEP 8 required two blank lines between `_SSEManagerService` and
+  `_CacheRefreshService`.
+
+## [2.26.7] - 2026-09-06
+
+### Fixed
+
+- **Bug: `ConnectionManager.connect()` calls `websocket.accept()` unconditionally** —
+  When an auth flow calls `await websocket.accept()` before passing the socket to
+  `connect()`, the second `accept()` raises a `RuntimeError`. Added `accept: bool = True`
+  keyword-only argument to `connect()` so callers that accept the WebSocket themselves
+  can pass `accept=False` to skip the duplicate call. Fully backward-compatible.
+
 ## [2.26.6] - 2026-09-06
 
 ### Fixed

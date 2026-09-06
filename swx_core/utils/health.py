@@ -175,15 +175,19 @@ class HealthChecker:
 async def check_database() -> HealthStatus:
     """Check database connectivity."""
     try:
-        async with get_session() as session:
+        session_gen = get_session()
+        session = await session_gen.__anext__()
+        try:
             await session.execute("SELECT 1")
-        
+        finally:
+            await session_gen.aclose()
+
         return HealthStatus(
             name="database",
             status="healthy",
             message="Database connection successful",
         )
-    
+
     except Exception as e:
         return HealthStatus(
             name="database",
@@ -219,8 +223,12 @@ async def check_database_pool() -> HealthStatus:
     import time
     start = time.monotonic()
     try:
-        async with get_session() as session:
+        session_gen = get_session()
+        session = await session_gen.__anext__()
+        try:
             await session.execute("SELECT 1")
+        finally:
+            await session_gen.aclose()
     except Exception as exc:
         return HealthStatus(
             name="database_pool",

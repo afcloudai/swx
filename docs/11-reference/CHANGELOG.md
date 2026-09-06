@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.8
+**Version:** 2.26.9
 **Last Updated:** 2026-09-06
 
 ---
@@ -12,6 +12,14 @@
 ---
 
 ## Overview
+
+### Version 2.26.9 (2026-09-06)
+
+**Bugfix: health check 503 — async_generator does not support async with**
+
+#### Fixed
+
+1. **`check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** — `get_session()` is an async generator (`async def ... yield`), not an async context manager. Using `async with get_session() as session:` raised `TypeError: 'async_generator' object does not support the asynchronous context manager protocol`, causing `/health` and `/ready` to return 503. Changed both functions to use `__anext__()` / `aclose()` to properly consume and close the async generator.
 
 ### Version 2.26.8 (2026-09-06)
 

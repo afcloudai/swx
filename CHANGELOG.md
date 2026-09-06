@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.6] - 2026-09-06
+
+### Fixed
+
+- **Bug: `/api/utils/health` returns 500 — datetime not JSON-serializable** —
+  `health_detailed()` called `result.model_dump()` which returns raw Python
+  `datetime` objects. `JSONResponse` uses `json.dumps()` which can't serialize
+  `datetime`. Changed both `/health` and `/ready` endpoints to use
+  `model_dump(mode="json")` so Pydantic converts datetimes to ISO strings.
+
+- **Bug: `register_exception_handlers` parameter shadows imported function** —
+  The `register_exception_handlers: bool` parameter in `create_swx_app()`
+  shadowed the imported `register_exception_handlers()` function from
+  `swx_core.exceptions.handlers`, causing `TypeError: 'bool' object is not
+  callable` at startup. Renamed the parameter to `install_exception_handlers`
+  to eliminate the shadow.
+
+- **Bug: `on_startup` does not await async callables** —
+  `on_startup` was typed as `Callable[[FastAPI], None]` and called
+  synchronously, so passing an `async def` function would silently return an
+  unawaited coroutine. Now uses `inspect.isawaitable()` to detect and await
+  async callables inside the lifespan. Type annotation broadened to
+  `Callable[[FastAPI], Any]`.
+
+- **Bug: `settings.VERSION` AttributeError in `create_swx_app()`** —
+  (v2.26.4 fix, included for completeness) `get_health_checker()` already
+  resolves version from `swx_core.__version__`, so `version=settings.VERSION`
+  was both broken and unnecessary.
+
 ## [2.26.5] - 2026-09-06
 
 ### Fixed

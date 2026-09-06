@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.5
+**Version:** 2.26.6
 **Last Updated:** 2026-09-06
 
 ---
@@ -13,15 +13,29 @@
 
 ## Overview
 
+### Version 2.26.6 (2026-09-06)
+
+**Bugfix: /api/utils/health 500 — datetime serialization**
+
+#### Fixed
+
+1. **`/api/utils/health` returns 500 — `datetime` not JSON-serializable** — `HealthCheckResult.model_dump()` returns raw Python `datetime` objects, which `JSONResponse` can't serialize. Changed to `model_dump(mode="json")` in both `/health` and `/ready` endpoints so Pydantic converts datetimes to ISO format strings.
+
+2. **`register_exception_handlers` parameter shadows imported function** — Renamed to `install_exception_handlers` to eliminate the shadow that caused `TypeError: 'bool' object is not callable`.
+
+3. **`on_startup` does not await async callables** — Added `inspect.isawaitable()` check to detect and await async callbacks. Type annotation broadened to `Callable[[FastAPI], Any]`.
+
+4. **`settings.VERSION` AttributeError** — (v2.26.4 fix) Changed `get_health_checker(version=settings.VERSION)` to `get_health_checker()`.
+
 ### Version 2.26.5 (2026-09-06)
 
 **Bugfix: parameter shadowing and async on_startup**
 
 #### Fixed
 
-1. **`register_exception_handlers` parameter shadows imported function** — The `register_exception_handlers: bool` parameter in `create_swx_app()` shadowed the imported `register_exception_handlers()` function, causing `TypeError: 'bool' object is not callable` at startup. Renamed the parameter to `install_exception_handlers`.
+1. **`register_exception_handlers` parameter shadows imported function** — Renamed to `install_exception_handlers`.
 
-2. **`on_startup` does not await async callables** — `on_startup` was called synchronously, so passing an `async def` would silently return an unawaited coroutine. Now detects and awaits async callables. Type annotation broadened to `Callable[[FastAPI], Any]`.
+2. **`on_startup` does not await async callables** — Added `inspect.isawaitable()` check.
 
 ### Version 2.26.4 (2026-09-06)
 
@@ -29,7 +43,7 @@
 
 #### Fixed
 
-1. **`create_swx_app()` references `settings.VERSION` which doesn't exist** — `get_health_checker(version=settings.VERSION)` would crash at startup. Changed to `get_health_checker()` which already resolves version from `swx_core.__version__`.
+1. **`create_swx_app()` references `settings.VERSION` which doesn't exist** — Changed to `get_health_checker()`.
 
 ### Version 2.26.3 (2026-09-05)
 2. [Version History](#version-history)

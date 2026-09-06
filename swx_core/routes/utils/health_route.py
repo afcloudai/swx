@@ -30,7 +30,7 @@ async def health_detailed(request: Request):
 
     result = await checker.check_all()
     status_code = 503 if result.status == "unhealthy" else 200
-    return JSONResponse(status_code=status_code, content=result.model_dump())
+    return JSONResponse(status_code=status_code, content=result.model_dump(mode="json"))
 
 
 @router.get("/ready", tags=["Health"])
@@ -61,7 +61,7 @@ async def readiness_check(request: Request):
             content={
                 "status": "not_ready",
                 "unhealthy_required": required_unhealthy,
-                "services": {k: v.model_dump() for k, v in result.services.items()},
+                "services": {k: v.model_dump(mode="json") for k, v in result.services.items()},
             },
         )
 

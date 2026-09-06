@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.10
+**Version:** 2.26.11
 **Last Updated:** 2026-09-06
 
 ---
@@ -12,6 +12,26 @@
 ---
 
 ## Overview
+
+### Version 2.26.11 (2026-09-06)
+
+**Bugfix: EventBus memory leak, Event hash, GracefulShutdown exit, SSE race condition, and more**
+
+#### Fixed
+
+1. **`EventBus._fired` dict grows without bound (memory leak)** — Added per-event cap of 100 entries with automatic pruning.
+
+2. **`Event.__hash__` uses `id(self.payload)` (non-deterministic)** — Changed to `hash((self.name, self.timestamp))` for deterministic hashing.
+
+3. **`GracefulShutdown._drain_and_exit` never terminates the process** — Added `os._exit(0)`. Fixed `drain_check()` to only return True when drain is complete. Added Windows compatibility for `SIGTERM`.
+
+4. **`SSEManager._subscribers` race condition** — Added `asyncio.Lock` to protect subscriber mutations.
+
+5. **`ConnectionManager.send()` accepts empty string key** — Added `ValueError` guard.
+
+6. **`StatsCollector` unbounded memory for transient channels/connections** — Added `cleanup_stale()` method.
+
+7. **`BackgroundScheduler._run_loop` tight loop when handler exceeds interval** — Added 1-second minimum sleep.
 
 ### Version 2.26.10 (2026-09-06)
 

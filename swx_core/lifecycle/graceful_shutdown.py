@@ -22,11 +22,16 @@ On SIGTERM:
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import logging
 from typing import Any, Optional
 
 from swx_core.middleware.logging_middleware import logger
+
+_SHUTDOWN_SIGNALS = [signal.SIGINT]
+if hasattr(signal, "SIGTERM"):
+    _SHUTDOWN_SIGNALS.append(signal.SIGTERM)
 
 
 class GracefulShutdown:
@@ -60,7 +65,7 @@ class GracefulShutdown:
             logger.warning("graceful_shutdown.no_event_loop")
             return
 
-        for sig in (signal.SIGTERM, signal.SIGINT):
+        for sig in _SHUTDOWN_SIGNALS:
             loop.add_signal_handler(sig, self._handle_signal, sig)
 
         logger.info("graceful_shutdown.installed drain_timeout=%ds", self._drain_timeout)
@@ -84,7 +89,6 @@ class GracefulShutdown:
     async def _drain_and_exit(self, sig_name: str) -> None:
         logger.info("graceful_shutdown.draining timeout=%ds", self._drain_timeout)
 
-        # Give SSE and WS managers time to send close frames.
         try:
             await asyncio.wait_for(self._drain_event.wait(), timeout=self._drain_timeout)
             logger.info("graceful_shutdown.drained")
@@ -92,14 +96,12 @@ class GracefulShutdown:
             logger.warning("graceful_shutdown.drain_timeout_exceeded")
 
         logger.info("graceful_shutdown.exiting signal=%s", sig_name)
+        os._exit(0)
 
     def notify_drained(self) -> None:
         """Called by SSE/WS managers when all connections are closed."""
         self._drain_event.set()
 
     async def drain_check(self) -> bool:
-        """Return True if all real-time connections have drained.
-
-        Suitable for ``GracefulShutdown(drain_check=realtime_stats.drain_check)``.
-        """
-        return self._shutting_down or self._drain_event.is_set()
+        """Return True if all real-time connections have drained or shutdown is in progress."""
+        return self._drain_event.is_set()

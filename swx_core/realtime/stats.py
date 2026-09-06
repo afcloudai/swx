@@ -171,6 +171,38 @@ class StatsCollector:
             self._ws_failed.pop(key, None)
 
     # ------------------------------------------------------------------
+    # Stale entry cleanup
+    # ------------------------------------------------------------------
+
+    async def cleanup_stale(self) -> None:
+        """Remove entries for disconnected channels and connections.
+
+        Call periodically (e.g. from a keepalive or health-check loop)
+        to prevent unbounded memory growth from transient channels.
+        """
+        async with self._lock:
+            stale_channels = [
+                ch for ch, subs in self._channel_subscribers.items()
+                if subs == 0
+            ]
+            for ch in stale_channels:
+                self._channel_subscribers.pop(ch, None)
+                self._channel_delivered.pop(ch, None)
+                self._channel_evicted.pop(ch, None)
+                self._channel_last_event.pop(ch, None)
+
+            stale_ws = [
+                key for key, connected in self._ws_connected.items()
+                if not connected
+            ]
+            for key in stale_ws:
+                self._ws_connected.pop(key, None)
+                self._ws_pending.pop(key, None)
+                self._ws_last_heartbeat.pop(key, None)
+                self._ws_sent.pop(key, None)
+                self._ws_failed.pop(key, None)
+
+    # ------------------------------------------------------------------
     # Bridge listener metrics
     # ------------------------------------------------------------------
 

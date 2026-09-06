@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.11] - 2026-09-06
+
+### Fixed
+
+- **Bug: `EventBus._fired` dict grows without bound (memory leak)** —
+  Every dispatched event was appended to `_fired[event]` with no cap, causing
+  unbounded memory growth in long-running production processes. Added a
+  per-event cap of 100 entries (oldest entries are pruned automatically).
+
+- **Bug: `Event.__hash__` uses `id(self.payload)` (non-deterministic)** —
+  `hash((self.name, id(self.payload), self.timestamp))` produced different
+  hashes for identical events across processes and even within the same process
+  (since `id()` is the memory address). Changed to `hash((self.name, self.timestamp))`
+  for deterministic hashing. Note: `Event` is `frozen=False` so mutation after
+  hashing is still possible but was already the case.
+
+- **Bug: `GracefulShutdown._drain_and_exit` never terminates the process** —
+  After draining (or timeout), the method just logged and returned — the process
+  kept running. Added `os._exit(0)` to actually terminate. Also fixed
+  `drain_check()` which returned `True` when `_shutting_down` was `True`
+  regardless of drain status — now only returns `True` when `_drain_event`
+  is set. Added Windows compatibility for `SIGTERM` (graceful degradation).
+
+- **Bug: `SSEManager._subscribers` race condition during `stop()` + `subscribe()`** —
+  `_subscribers` dict was modified without locking. In an asyncio context,
+  re-entrancy between `subscribe()`, `broadcast()`, and `stop()` could cause
+  stale references. Added `asyncio.Lock` to protect subscriber mutations
+  in `subscribe()`, `_remove_subscriber()`, and the keepalive loop.
+
+- **Bug: `ConnectionManager.send()` accepts empty string key `""`** —
+  An empty key would create connections that are hard to debug. Added a
+  `ValueError` guard in `send()` to reject empty keys early.
+
+- **Bug: `StatsCollector` unbounded memory for transient channels/connections** —
+  Per-channel and per-connection stats dicts never removed entries for
+  disconnected channels/connections. Added `cleanup_stale()` method that
+  removes entries with zero subscribers or disconnected status. Applications
+  should call this periodically (e.g. from a keepalive loop).
+
+- **Bug: `BackgroundScheduler._run_loop` tight loop when handler exceeds interval** —
+  When a job's handler takes longer than its interval, `remaining` becomes
+  negative and the job runs again immediately with no rest period. Changed
+  `await asyncio.sleep(remaining)` to `await asyncio.sleep(max(remaining, _MIN_SLEEP))`
+  with a 1-second minimum, preventing CPU-spinning tight loops.
+
 ## [2.26.10] - 2026-09-06
 
 ### Fixed

@@ -39,6 +39,7 @@ from swx_core.middleware.logging_middleware import logger
 
 
 _DEFAULT_ALERT_THRESHOLD = 3
+_MIN_SLEEP = 1  # minimum seconds between job iterations to prevent tight loops
 
 
 @dataclass
@@ -195,8 +196,7 @@ class BackgroundScheduler:
                     await self._emit_failure_alert(job, exc)
 
             remaining = job.interval - (time.monotonic() - start)
-            if remaining > 0:
-                await asyncio.sleep(remaining)
+            await asyncio.sleep(max(remaining, _MIN_SLEEP))
 
     async def _emit_failure_alert(self, job: ScheduledJob, exc: Exception) -> None:
         """Emit an alert when a job exceeds the consecutive failure threshold."""

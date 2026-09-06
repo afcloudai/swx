@@ -169,7 +169,13 @@ class ConnectionManager:
         queues the message for drain-on-reconnect.
 
         Returns ``True`` if sent immediately, ``False`` if queued.
+
+        Raises:
+            ValueError: If *key* is empty.
         """
+        if not key:
+            raise ValueError("Connection key must not be empty")
+
         conn = self._connections.get(key)
 
         if conn is not None:

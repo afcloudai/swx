@@ -81,6 +81,7 @@ class SSEManager:
         self._subscriber_count: int = 0
         self._keepalive_task: Optional[asyncio.Task[None]] = None
         self._running = False
+        self._lock = asyncio.Lock()
 
     @classmethod
     def get_instance(cls) -> Optional["SSEManager"]:
@@ -141,8 +142,9 @@ class SSEManager:
         event store before streaming live events.
         """
         sub = _Subscriber(queue=asyncio.Queue(maxsize=256), channel=channel)
-        self._subscribers.setdefault(channel, []).append(sub)
-        self._subscriber_count += 1
+        async with self._lock:
+            self._subscribers.setdefault(channel, []).append(sub)
+            self._subscriber_count += 1
 
         if self._stats:
             await self._stats.sse_subscribe(channel)
@@ -207,19 +209,22 @@ class SSEManager:
     # ------------------------------------------------------------------
 
     async def _remove_subscriber(self, channel: str, sub: _Subscriber) -> None:
-        subs = self._subscribers.get(channel, [])
-        if sub in subs:
-            subs.remove(sub)
-        self._subscriber_count = max(0, self._subscriber_count - 1)
+        async with self._lock:
+            subs = self._subscribers.get(channel, [])
+            if sub in subs:
+                subs.remove(sub)
+            self._subscriber_count = max(0, self._subscriber_count - 1)
 
         if self._stats:
             await self._stats.sse_unsubscribe(channel)
 
-        if not subs:
-            self._subscribers.pop(channel, None)
-            await self._store.cleanup(channel)
+        async with self._lock:
+            subs = self._subscribers.get(channel, [])
+            if not subs:
+                self._subscribers.pop(channel, None)
 
-        logger.info("sse.unsubscribe channel=%s remaining=%d", channel, len(subs))
+        await self._store.cleanup(channel)
+        logger.info("sse.unsubscribe channel=%s remaining=%d", channel, len(self._subscribers.get(channel, [])))
 
     # ------------------------------------------------------------------
     # Keepalive

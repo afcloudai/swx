@@ -70,7 +70,6 @@ def _register_router(
         if user_defined_prefix.startswith(version_prefix):
             user_defined_prefix = user_defined_prefix[len(version_prefix):]
 
-    module_router.prefix = user_defined_prefix
     full_path = f"{include_prefix}{user_defined_prefix}"
     tag_parts = [part.capitalize() for part in full_path.split("/") if part]
     tag_prefix = "Core API" if is_core else "User API"
@@ -78,7 +77,7 @@ def _register_router(
     tag = f"{tag_prefix} - {' - '.join(tag_parts)}"
 
     try:
-        main_router.include_router(module_router, prefix=include_prefix, tags=[tag])
+        main_router.include_router(module_router, prefix=full_path, tags=[tag])
         print(f"✅ Registered {kind}: '{full_module_name}' → '{full_path}' with tag '{tag}'")
     except Exception as e:
         print(f"❌ ERROR: Failed to register {kind} from '{full_module_name}': {e}")

@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.11
+**Version:** 2.26.12
 **Last Updated:** 2026-09-06
 
 ---
@@ -12,6 +12,16 @@
 ---
 
 ## Overview
+
+### Version 2.26.12 (2026-09-06)
+
+**Bugfix: WebSocket routes silently unreachable — prefix mutation + missing WS endpoint**
+
+#### Fixed
+
+1. **`_register_router()` prefix mutation silently dropped routes from the route tree** — Mutating `module_router.prefix` before `include_router()` was ineffective because `include_router()`'s `prefix` argument took precedence. Both HTTP and WS routes resolved at wrong paths. Fixed by composing `full_path` and passing it directly to `include_router()`.
+
+2. **No WebSocket endpoints existed in the route tree** — The `websocket_router` auto-discovery mechanism was functional but no module defined it. Added `swx_core/routes/ws_route.py` with `/ws/{device_id}` endpoint.
 
 ### Version 2.26.11 (2026-09-06)
 

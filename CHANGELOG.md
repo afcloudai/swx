@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.12] - 2026-09-06
+
+### Fixed
+
+- **Bug: `_register_router()` prefix mutation silently dropped WebSocket routes from the route tree** —
+  `module_router.prefix = user_defined_prefix` mutated the child router's prefix attribute, but
+  `include_router()`'s `prefix` argument took precedence, making the mutation ineffective. Both HTTP
+  and WebSocket routes resolved at `include_prefix + route.path` instead of the logged
+  `include_prefix + user_defined_prefix + route.path`. The logged path was misleading — routes
+  registered at a different path than reported. Fixed by composing `full_path` and passing it
+  directly as the `prefix` argument to `include_router()`.
+
+- **Bug: No WebSocket endpoints existed in the route tree** — The `websocket_router` auto-discovery
+  mechanism in `router.py` was functional, but no module in swx_core defined a `websocket_router`
+  attribute. All WebSocket upgrade requests returned 403 (uvicorn's default for connections closed
+  before accept) with no error or warning. Added `swx_core/routes/ws_route.py` with a
+  `websocket_router` that registers `/ws/{device_id}` using `ConnectionManager`.
+
 ## [2.26.11] - 2026-09-06
 
 ### Fixed

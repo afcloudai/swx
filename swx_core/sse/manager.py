@@ -248,14 +248,19 @@ class SSEManager:
 
         Uses ``id`` from *data* if present (set during broadcast).
         Falls back to serialising the entire dict as ``data:``.
+
+        Per the SSE specification (W3C), each ``data:`` field must
+        appear on its own line.  If the serialised payload contains
+        newlines, it is split across multiple ``data:`` lines.
         """
         lines: list[str] = []
         if "id" in data:
             lines.append(f"id: {data['id']}")
         if "event" in data:
             lines.append(f"event: {data['event']}")
-        payload = json.dumps({k: v for k, v in data.items() if k not in ("id", "event")}, default=str)
-        lines.append(f"data: {payload}")
+        payload_json = json.dumps({k: v for k, v in data.items() if k != "id"}, default=str)
+        for line in payload_json.split("\n"):
+            lines.append(f"data: {line}")
         lines.append("")
         lines.append("")
         return "\n".join(lines)

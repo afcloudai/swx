@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.10] - 2026-09-06
+
+### Fixed
+
+- **Bug: `SSEManager._format_event()` strips `"event"` key from data payload** —
+  `_format_event()` removed both `"id"` and `"event"` from the JSON payload, but
+  `"event"` is data content that should appear in both the SSE `event:` line and
+  the `data:` JSON. Stripping it meant clients lost the event type in the payload.
+  Changed the filter to only exclude `"id"` (which is a separate SSE field).
+
+- **Bug: SSE `_format_event()` doesn't handle multiline data per SSE spec** —
+  Per W3C SSE specification, each line of a `data:` field must be prefixed with
+  `data:`. If `json.dumps` with `default=str` produces newlines (e.g. from
+  multi-line string representations), the old code would break framing. Now
+  splits the JSON on `\n` and emits each line as a separate `data:` line.
+
+- **Bug: `SSEBridge.bridge()` / `WSBridge.bridge()` — duplicate registration leaks old handler** —
+  Calling `bridge()` twice for the same event name silently overwrote the `_registrations`
+  entry while leaving the old handler registered on the EventBus. Now `bridge()` calls
+  `unbridge()` first if the event is already registered, ensuring the old handler is
+  properly removed before registering the new one.
+
+- **Bug: `CorrelationIdMiddleware` — no validation on client-supplied `X-Correlation-ID`** —
+  Clients could inject arbitrary strings (including CRLF characters for header injection,
+  or megabyte-length values). Added a regex validation (`^[a-zA-Z0-9._\-]{1,128}$`) and
+  length limit (128 chars). Invalid client IDs are replaced with a generated UUID.
+
+- **Bug: `query.py` — `async with get_session()` on async generator (4 occurrences)** —
+  `get_session()` is an async generator (`async def ... yield`), not an async context
+  manager. Using `async with get_session() as session:` raises `TypeError`. Changed all
+  4 occurrences to use `AsyncSessionLocal()` which is a proper async context manager.
+
+- **Bug: `UnitOfWork.__aenter__/__aexit__` — `get_session()` is not an async context manager** —
+  `UnitOfWork` called `get_session().__aenter__()` and `__aexit__()`, but async generators
+  don't implement these methods. Changed to use `AsyncSessionLocal()` which returns an
+  `AsyncSession` with proper `__aenter__`/`__aexit__` support.
+
+- **Code-clarity: `_registrations` type annotation mismatch** —
+  `SSEBridge._registrations` and `WSBridge._registrations` were typed as
+  `Dict[str, str]` but stored `tuple[str, Any]` values. Fixed to
+  `Dict[str, tuple[str, Any]]`.
+
+- **Code-clarity: duplicate `_SECRET_FIELDS` in `provider_factory.py`** —
+  `_SECRET_FIELDS_EMAIL` and `_SECRET_FIELDS_SMS` were defined twice (lines 38-39 and 71-72).
+  Removed the duplicate definition.
+
+- **Bug: `check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** —
+  (From v2.26.9, included here for completeness.) `get_session()` is an async generator,
+  not an async context manager. Changed both functions to use `__anext__()` / `aclose()`.
+
 ## [2.26.9] - 2026-09-06
 
 ### Fixed

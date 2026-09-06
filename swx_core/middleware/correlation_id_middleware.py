@@ -25,6 +25,7 @@ Behaviour
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Callable
 
@@ -33,6 +34,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _HEADER = b"x-correlation-id"
 _HEADER_STR = "x-correlation-id"
+_CORRELATION_ID_RE = re.compile(r"^[a-zA-Z0-9._\-]{1,128}$")
+_MAX_CORRELATION_ID_LEN = 128
 
 
 def _extract_header(headers: list[tuple[bytes, bytes]], name: bytes) -> str | None:
@@ -78,8 +81,9 @@ class CorrelationIdMiddleware:
         headers_list: list[tuple[bytes, bytes]] = scope.get("headers", [])
         correlation_id = _extract_header(headers_list, _HEADER)
 
-        if not correlation_id:
+        if not correlation_id or len(correlation_id) > _MAX_CORRELATION_ID_LEN or not _CORRELATION_ID_RE.match(correlation_id):
             correlation_id = str(uuid.uuid4())
+            headers_list = list(scope.get("headers", []))
             headers_list.append((_HEADER, correlation_id.encode("latin-1")))
             scope["headers"] = headers_list
 

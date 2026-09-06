@@ -68,9 +68,6 @@ def register_sms_sender(provider_type: str, sender: Any) -> None:
     """
     _SMS_SENDERS[provider_type] = sender
 
-_SECRET_FIELDS_EMAIL = {"password", "api_key"}
-_SECRET_FIELDS_SMS = {"auth_token", "api_key"}
-
 
 def _decrypt_field(value: str | None) -> str | None:
     if not value or not is_encrypted(value):

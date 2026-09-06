@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from functools import wraps
 import asyncio
 
-from swx_core.database.db import get_session
+from swx_core.database.db import AsyncSessionLocal
 
 T = TypeVar("T")
 
@@ -77,21 +77,17 @@ class UnitOfWork:
     async def __aenter__(self):
         """Enter the async context manager."""
         if self._session is None:
-            # Create a new session context
-            self._session_context = get_session()
+            self._session_context = AsyncSessionLocal()
             self._session = await self._session_context.__aenter__()
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Exit the async context manager with automatic commit/rollback."""
         if exc_type is not None:
-            # Exception occurred - rollback
             await self.rollback()
         elif not self._committed and not self._rolled_back:
-            # No exception and not explicitly committed - auto commit
             await self.commit()
         
-        # Close session if we created it
         if hasattr(self, '_session_context'):
             await self._session_context.__aexit__(exc_type, exc_val, exc_tb)
     

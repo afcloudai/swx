@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.9
+**Version:** 2.26.10
 **Last Updated:** 2026-09-06
 
 ---
@@ -12,6 +12,30 @@
 ---
 
 ## Overview
+
+### Version 2.26.10 (2026-09-06)
+
+**Bugfix: SSE payload stripping, async generator misuse, bridge handler leak, header injection**
+
+#### Fixed
+
+1. **`SSEManager._format_event()` strips `"event"` key from data payload** — `_format_event()` removed both `"id"` and `"event"` from the JSON payload, but `"event"` is data content that should appear in both the SSE `event:` line and the `data:` JSON. Changed the filter to only exclude `"id"`.
+
+2. **SSE `_format_event()` doesn't handle multiline data per SSE spec** — Per W3C SSE specification, each line of a `data:` field must be prefixed with `data:`. Now splits the JSON on `\n` and emits each line as a separate `data:` line.
+
+3. **`SSEBridge.bridge()` / `WSBridge.bridge()` — duplicate registration leaks old handler** — Calling `bridge()` twice for the same event name silently overwrote `_registrations` while leaving the old handler on the EventBus. Now `bridge()` calls `unbridge()` first.
+
+4. **`CorrelationIdMiddleware` — no validation on client-supplied `X-Correlation-ID`** — Clients could inject arbitrary strings including CRLF characters for header injection. Added regex validation (`^[a-zA-Z0-9._\-]{1,128}$`) and length limit. Invalid IDs are replaced with a generated UUID.
+
+5. **`query.py` — `async with get_session()` on async generator (4 occurrences)** — `get_session()` is an async generator, not an async context manager. Changed all occurrences to use `AsyncSessionLocal()` which is a proper async context manager.
+
+6. **`UnitOfWork.__aenter__/__aexit__` — `get_session()` is not an async context manager** — `UnitOfWork` called `get_session().__aenter__()` and `__aexit__()`, but async generators don't implement these methods. Changed to use `AsyncSessionLocal()`.
+
+7. **`_registrations` type annotation mismatch** — `SSEBridge._registrations` and `WSBridge._registrations` were typed as `Dict[str, str]` but stored `tuple[str, Any]` values. Fixed to `Dict[str, tuple[str, Any]]`.
+
+8. **Duplicate `_SECRET_FIELDS` in `provider_factory.py`** — `_SECRET_FIELDS_EMAIL` and `_SECRET_FIELDS_SMS` were defined twice. Removed the duplicate.
+
+9. **`check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** — (From v2.26.9) Changed both functions to use `__anext__()` / `aclose()`.
 
 ### Version 2.26.9 (2026-09-06)
 

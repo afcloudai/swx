@@ -53,7 +53,7 @@ class WSBridge:
         self._ws = ws_manager
         self._bus = event_bus or _import_event_bus()
         self._stats = stats
-        self._registrations: Dict[str, str] = {}
+        self._registrations: Dict[str, tuple[str, Any]] = {}
 
     def bridge(
         self,
@@ -74,6 +74,9 @@ class WSBridge:
             ``self``, for chaining.
         """
         listener_name = f"WSBridge[{event}]"
+
+        if listener_name in self._registrations:
+            self.unbridge(event)
 
         async def _handler(ev: Event) -> None:
             if self._stats:

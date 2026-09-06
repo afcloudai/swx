@@ -55,7 +55,7 @@ class SSEBridge:
         self._bus = event_bus or globals().get("event_bus") or _import_event_bus()
         self._stats = stats
         self._serializers = serializer_registry or sse_serializers
-        self._registrations: Dict[str, str] = {}
+        self._registrations: Dict[str, tuple[str, Any]] = {}
 
     def bridge(
         self,
@@ -79,6 +79,9 @@ class SSEBridge:
             ``self``, for chaining.
         """
         listener_name = f"SSEBridge[{event}]"
+
+        if listener_name in self._registrations:
+            self.unbridge(event)
 
         async def _handler(ev: Event) -> None:
             if self._stats:

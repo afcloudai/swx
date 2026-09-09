@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 
 _KEEPALIVE_INTERVAL = 15  # seconds
 
+SOURCE_META_KEY = "_broadcast_source"
+SOURCE_REDIS_SSE = "redis_sse"
+
 
 @dataclass
 class _Subscriber:
@@ -72,10 +75,12 @@ class SSEManager:
         event_store: Optional[SSEEventStore] = None,
         stats: Optional[StatsCollector] = None,
         keepalive_interval: int = _KEEPALIVE_INTERVAL,
+        redis_bridge: Any = None,
     ) -> None:
         self._store = event_store or SSEEventStore()
         self._stats = stats
         self._keepalive_interval = keepalive_interval
+        self._redis_bridge = redis_bridge
 
         self._subscribers: Dict[str, List[_Subscriber]] = {}
         self._subscriber_count: int = 0
@@ -94,9 +99,10 @@ class SSEManager:
         event_store: Optional[SSEEventStore] = None,
         stats: Optional[StatsCollector] = None,
         keepalive_interval: int = _KEEPALIVE_INTERVAL,
+        redis_bridge: Any = None,
     ) -> "SSEManager":
         """Create and register the global singleton instance."""
-        cls._instance = cls(event_store=event_store, stats=stats, keepalive_interval=keepalive_interval)
+        cls._instance = cls(event_store=event_store, stats=stats, keepalive_interval=keepalive_interval, redis_bridge=redis_bridge)
         return cls._instance
 
     # ------------------------------------------------------------------
@@ -178,9 +184,18 @@ class SSEManager:
     async def broadcast(self, channel: str, data: Dict[str, Any]) -> int:
         """Push *data* to all subscribers on *channel*.
 
-        Returns the number of subscribers that received the event
+        Persists the event for Last-Event-ID replay, delivers to local
+        subscribers, and publishes to Redis for cross-worker delivery
+        (when the SSE Redis bridge is configured).
+
+        Returns the number of local subscribers that received the event
         (or were skipped because their queue was full).
         """
+        # Events arriving from Redis must not be re-published (loop prevention).
+        from_redis = data.get(SOURCE_META_KEY) == SOURCE_REDIS_SSE
+        if from_redis:
+            data = {k: v for k, v in data.items() if k != SOURCE_META_KEY}
+
         event_id = self._store.next_id()
         event_frame = {"id": event_id, "channel": channel, **data}
 
@@ -188,8 +203,21 @@ class SSEManager:
         await self._store.store(channel, event_id, event_frame)
 
         frame = self._format_event(event_frame)
-        delivered = 0
+        delivered = await self._push_to_local_subscribers(channel, frame)
 
+        # Fan out to other workers via Redis (only for locally-originated events).
+        if self._redis_bridge is not None and not from_redis:
+            await self._redis_bridge.publish(channel, event_frame)
+
+        logger.debug("sse.broadcast channel=%s event_id=%s delivered=%d", channel, event_id, delivered)
+        return delivered
+
+    async def _push_to_local_subscribers(self, channel: str, frame: str) -> int:
+        """Push a pre-formatted SSE frame to all local subscribers on *channel*.
+
+        Returns the number of subscribers that received the event.
+        """
+        delivered = 0
         for sub in list(self._subscribers.get(channel, [])):
             try:
                 sub.queue.put_nowait(frame)
@@ -200,9 +228,18 @@ class SSEManager:
                 if self._stats:
                     await self._stats.sse_evicted(channel)
                 logger.warning("sse.queue_full channel=%s subscriber_dropped", channel)
-
-        logger.debug("sse.broadcast channel=%s event_id=%s delivered=%d", channel, event_id, delivered)
         return delivered
+
+    async def _deliver_from_redis(self, channel: str, event_data: Dict[str, Any]) -> int:
+        """Deliver an event received from Redis to local subscribers.
+
+        Does NOT re-persist — the originating worker already stored it.
+        Does NOT re-publish to Redis — the ``SOURCE_META_KEY`` marker in
+        ``event_data`` is only used internally and stripped before framing.
+        """
+        clean_data = {k: v for k, v in event_data.items() if k != SOURCE_META_KEY}
+        frame = self._format_event(clean_data)
+        return await self._push_to_local_subscribers(channel, frame)
 
     # ------------------------------------------------------------------
     # Cleanup

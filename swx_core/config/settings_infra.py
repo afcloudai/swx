@@ -298,3 +298,13 @@ class InfraSettingsMixin(BaseSettings):
         default="swx:events",
         description="Redis channel prefix for event broadcasting (default: 'swx:events')",
     )
+
+    # SSE Bridge Configuration (Redis Pub/Sub for cross-worker SSE delivery)
+    SSE_BRIDGE_ENABLED: bool = Field(
+        default=True,
+        description="Enable cross-worker SSE broadcast via Redis Pub/Sub (requires REDIS_ENABLED)",
+    )
+    SSE_BRIDGE_CHANNEL_PREFIX: str = Field(
+        default="swx:sse",
+        description="Redis channel prefix for SSE broadcast (default: 'swx:sse')",
+    )

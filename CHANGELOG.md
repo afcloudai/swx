@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.13] - 2026-09-09
+
+### Added
+
+- **SSE cross-worker delivery via Redis Pub/Sub** — `SSERedisBridge` bridges
+  `SSEManager.broadcast()` across multiple worker processes. Without this bridge,
+  SSE events published on worker N only reach subscribers connected to worker N;
+  subscribers on other workers never receive the event. The bridge publishes
+  broadcasts to Redis channel `swx:sse:{channel}` and each worker's listener
+  re-delivers to local subscribers. Controlled by `SSE_BRIDGE_ENABLED` (default:
+  True) and `SSE_BRIDGE_CHANNEL_PREFIX` (default: `swx:sse`) settings.
+
+### Fixed
+
+- **Loop prevention**: Events arriving from Redis carry a `_broadcast_source`
+  marker that prevents re-publishing, matching the same pattern used by
+  `RedisEventBridge` for EventBus events.
+
+- **`SSEManager._push_to_local_subscribers()` was sync** — `StatsCollector`
+  methods `sse_delivered` and `sse_evicted` are async; the old inline loop
+  called them with `await` correctly, but the extracted method needed to be
+  `async def` to preserve that. Fixed.
+
+- **`SSERedisBridge._listen_loop()` stale pubsub reference** — After reconnect,
+  the loop continued reading from the captured `pubsub` local variable instead
+  of the updated `self._pubsub`. Fixed by re-reading `self._pubsub` each
+  iteration.
+
 ## [2.26.12] - 2026-09-06
 
 ### Fixed

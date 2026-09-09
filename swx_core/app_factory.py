@@ -196,20 +196,55 @@ class _SessionCleanupService(_AsyncTaskService):
 
 
 class _SSEManagerService(LifecycleService):
-    """Start and stop the SSE connection manager."""
+    """Start and stop the SSE connection manager and its Redis bridge."""
 
     name = "sse_manager"
 
+    def __init__(self) -> None:
+        self._bridge: Any = None
+
     async def start(self) -> None:
         from swx_core.sse.manager import SSEManager
+
         manager = SSEManager.get_instance()
         if manager is not None:
             await manager.start()
 
+        if not settings.REDIS_ENABLED or not settings.SSE_BRIDGE_ENABLED:
+            return
+
+        from swx_core.container.container import get_container
+        from swx_core.sse.redis_bridge import SSERedisBridge
+
+        container = get_container()
+        redis_client = None
+        if container.bound("redis.client"):
+            try:
+                redis_client = container.make("redis.client")
+            except Exception as exc:
+                logger.warning("sse.redis_bridge.redis_unavailable %s", exc)
+                return
+
+        if redis_client is not None and manager is not None:
+            bridge = SSERedisBridge(
+                sse_manager=manager,
+                redis_client=redis_client,
+                channel_prefix=settings.SSE_BRIDGE_CHANNEL_PREFIX,
+            )
+            await bridge.start()
+            manager._redis_bridge = bridge
+            self._bridge = bridge
+            logger.info("sse.redis_bridge.wired")
+
     async def stop(self) -> None:
+        if self._bridge is not None:
+            await self._bridge.stop()
+            self._bridge = None
+
         from swx_core.sse.manager import SSEManager
         manager = SSEManager.get_instance()
         if manager is not None:
+            manager._redis_bridge = None
             await manager.stop()
 
 

@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.14
+**Version:** 2.26.15
 **Last Updated:** 2026-09-09
 
 ---
@@ -12,6 +12,15 @@
 ---
 
 ## Overview
+
+### Version 2.26.15 (2026-09-09)
+
+**Bugfix: `ROUTE_PREFIX = ""` triggered auto-derivation instead of mounting at root**
+
+Setting `ROUTE_PREFIX = ""` in a route module was treated the same as not setting
+it at all, causing auto-derivation to inject module-name prefixes. Fixed by tracking
+whether `ROUTE_PREFIX` was explicitly set, skipping auto-derivation when it was.
+Also fixed the `/` normalization guard to not force empty prefixes to `"/"`.
 
 ### Version 2.26.14 (2026-09-09)
 

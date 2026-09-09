@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.15] - 2026-09-09
+
+### Fixed
+
+- **Bug: `ROUTE_PREFIX = ""` in route modules triggered auto-derivation instead of
+  mounting at root** — The `if not user_defined_prefix:` guard treated an explicitly
+  set `ROUTE_PREFIX = ""` the same as a missing prefix, causing the auto-derivation
+  logic to inject module-name prefixes that the developer deliberately suppressed.
+
+  Added `prefix_explicitly_set` tracking: when `ROUTE_PREFIX` is present in the module
+  (even if empty), auto-derivation is skipped and the empty prefix is honored. This lets
+  modules opt out of path-prefixing entirely by setting `ROUTE_PREFIX = ""`.
+
+  Also fixed: the `/` normalization guard (`if not user_defined_prefix.startswith("/")`)
+  now only runs when `user_defined_prefix` is non-empty, so an explicit empty prefix
+  stays empty instead of being forced to `"/"`.
+
 ## [2.26.14] - 2026-09-09
 
 ### Fixed

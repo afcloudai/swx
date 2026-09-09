@@ -39,17 +39,24 @@ def _register_router(
 ):
     """Register a single APIRouter (HTTP or WebSocket) onto main_router.
 
-    Resolves the prefix from ``ROUTE_PREFIX`` module attr or the router's own
-    ``.prefix``, falling back to a path derived from ``route_parts``.  Then
-    calls ``main_router.include_router(...)`` with the composed prefix and tag.
+    Resolves the prefix from ``ROUTE_PREFIX`` module attr (explicit, even
+    if empty) or the router's own ``.prefix``, falling back to a path
+    derived from ``route_parts`` only when neither source provides a
+    value.  Setting ``ROUTE_PREFIX = ""`` in a module disables auto-
+    derivation and mounts the router at the ``include_prefix`` root.
+
+    Calls ``main_router.include_router(...)`` with ``prefix=include_prefix``
+    and sets ``module_router.prefix`` so FastAPI composes the full path
+    correctly for aggregated packages with sub-routers.
     """
     module_prefix = getattr(module, "ROUTE_PREFIX", None)
+    prefix_explicitly_set = module_prefix is not None
     if module_prefix is not None:
         user_defined_prefix = module_prefix.strip()
     else:
         user_defined_prefix = module_router.prefix.strip()
 
-    if not user_defined_prefix:
+    if not user_defined_prefix and not prefix_explicitly_set:
         subfolders = route_parts[:-1]
         route_file = route_parts[-1].replace("_route", "").replace("_routes", "")
         prefix_parts = list(subfolders)
@@ -62,7 +69,7 @@ def _register_router(
         )
         user_defined_prefix = "/" + "/".join(prefix_tail)
 
-    if not user_defined_prefix.startswith("/"):
+    if user_defined_prefix and not user_defined_prefix.startswith("/"):
         user_defined_prefix = "/" + user_defined_prefix
 
     if version:

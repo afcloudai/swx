@@ -1,6 +1,6 @@
 # Changelog
 
-**Version:** 2.26.13
+**Version:** 2.26.14
 **Last Updated:** 2026-09-09
 
 ---
@@ -12,6 +12,20 @@
 ---
 
 ## Overview
+
+### Version 2.26.14 (2026-09-09)
+
+**Bugfix: Route registration double-prefix for aggregated packages**
+
+The v2.26.12 fix for `_register_router()` removed `module_router.prefix = user_defined_prefix`
+and passed `full_path` to `include_router()`. This broke the aggregated package pattern
+where `admin/__init__.py` includes sub-routers like `auth_route` (with `prefix="/admin/auth"`).
+FastAPI composed the sub-router's `.prefix` on top of the `include_router` prefix, producing
+`/api/admin/admin/auth/login` instead of `/api/admin/auth/login`.
+
+Fixed by restoring the `.prefix` mutation and passing only `include_prefix` to
+`include_router()`. FastAPI correctly composes `include_prefix + module_router.prefix` and
+resolves sub-router prefixes within that context.
 
 ### Version 2.26.13 (2026-09-09)
 

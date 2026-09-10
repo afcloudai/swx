@@ -1,7 +1,7 @@
 # Changelog
 
-**Version:** 2.26.15
-**Last Updated:** 2026-09-09
+**Version:** 2.28.0
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -12,6 +12,40 @@
 ---
 
 ## Overview
+
+### Version 2.28.0 (2026-09-10)
+
+**WebSocket cross-worker relay, fork-safe singleton, worker observability**
+
+#### Added
+
+1. **`WSRedisBridge`** (`swx_core.websocket.redis_bridge`) — Bridges `ConnectionManager.send()` and `broadcast()` across gunicorn workers via Redis Pub/Sub, mirroring the `SSERedisBridge` architecture. Publishes to `swx:ws:{action}` channels; background listener delivers locally via `_deliver_from_redis()`. Loop prevention via `_broadcast_source="redis_ws"` marker.
+
+2. **Fork-safe singleton** — `ConnectionManager.create()` / `get_instance()` pattern replaces module-level instantiation. Created in app lifespan startup (`_WSManagerService`) after gunicorn fork. `ws_route.py` resolves the singleton at request time.
+
+3. **`_WSManagerService`** — Lifecycle service in `app_factory.py` that creates, starts, and stops the WS manager and Redis bridge alongside the existing SSE manager.
+
+4. **Per-connection metadata** — `connect()` accepts `metadata` dict (e.g. `user_id`, `ip`, `transport`) stored on the connection and returned by `connection_info()` / `all_connection_info()`.
+
+5. **`GET /admin/ws/status`** — Admin endpoint returning `worker_id`, active connections with per-connection metadata, aggregate metrics, and Redis bridge stats.
+
+6. **Settings** — `WS_BRIDGE_ENABLED` (default `True`), `WS_BRIDGE_CHANNEL_PREFIX` (default `"swx:ws"`).
+
+7. **Structured logging** — Every `ConnectionManager` and `WSRedisBridge` log line now includes `worker_id` (PID).
+
+8. **Observability properties** — `ConnectionManager.status`, `worker_id`, `connection_count`, `bridge_stats`, `metrics`.
+
+#### Fixed
+
+1. **Gunicorn fork bug** — Module-level `ConnectionManager()` in `ws_route.py` was fork-copied with an empty `_connections` dict. Replaced with `get_instance()` resolved at request time.
+
+2. **Double-publish in `send()`** — `_publish_to_redis()` was called on both local-success and queue-fallback paths, publishing disconnected-key messages twice. Refactored to `_send_local()` with a single `_publish_to_redis()` call at the `send()` level.
+
+3. **Dead loop-prevention check** — `_publish_to_redis()` parsed `message` as JSON to check for `SOURCE_META_KEY`, but `message` can be arbitrary text. Loop prevention is structural (`_deliver_from_redis` never calls `_publish_to_redis`). Removed dead code.
+
+4. **Dead code in `_handle_message`** — `SOURCE_META_KEY` check set an unused `source` variable then did `pass`. Removed.
+
+5. **Removed `send_sync` / `broadcast_sync`** — `asyncio.run()` in a forked gunicorn worker creates a new event loop with no access to the app's WS manager or Redis bridge. Both methods removed.
 
 ### Version 2.26.15 (2026-09-09)
 

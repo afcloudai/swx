@@ -56,6 +56,7 @@ Framework-grade documentation for production deployment.
 - [PROMPT_INJECTION.md](04-core-concepts/PROMPT_INJECTION.md) - Prompt injection detection and scoring (NEW)
 - [COMPLIANCE_REPORTS.md](04-core-concepts/COMPLIANCE_REPORTS.md) - Compliance readiness reports (GDPR, HIPAA, CCPA, DORA, FERPA) (NEW)
 - [LAZY_IMPORT.md](04-core-concepts/LAZY_IMPORT.md) - Lazy import proxy for circular imports and startup optimization (NEW)
+- [WEBSOCKET.md](04-core-concepts/WEBSOCKET.md) - WebSocket Connection Manager, cross-worker relay, singleton lifecycle, admin observability (v2.28)
 
 ## 05. Security
 

@@ -488,22 +488,36 @@ sse_serializers.unregister("order.created")
 
 **Module:** `swx_core.websocket.manager`
 
-Single-connection-per-key enforcement with pending message queue.
+Single-connection-per-key enforcement with cross-worker relay, fork-safe singleton, and observability. Uses `create()`/`get_instance()` pattern (not module-level instantiation) to survive gunicorn pre-fork.
 
 ```python
 from swx_core.websocket.manager import ConnectionManager
 
-manager = ConnectionManager()
+# Get the post-fork singleton (created by _WSManagerService in app lifespan)
+mgr = ConnectionManager.get_instance()
 
-# Accept a connection (replaces any existing connection for the same key)
-await manager.connect("user:42", websocket)
+# Accept a connection with metadata for observability
+await mgr.connect("device-42", websocket,
+                  metadata={"user_id": "abc", "ip": "1.2.3.4"})
 
-# Send a message (queues if client is temporarily disconnected)
-await manager.send("user:42", {"type": "chat", "text": "Hello"})
+# Send a message (publishes to Redis for cross-worker delivery)
+await mgr.send("device-42", json.dumps({"type": "order.update"}))
+
+# Broadcast to all (optionally exclude one key)
+await mgr.broadcast(json.dumps({"type": "system.maintenance"}),
+                    exclude="device-99")
+
+# Observability
+info = mgr.connection_info("device-42")   # per-connection metadata
+all_info = mgr.all_connection_info()       # all connections on this worker
+metrics = mgr.metrics                      # aggregate counters
+status = mgr.status                        # "running" or "stopped"
 
 # Disconnect
-await manager.disconnect("user:42")
+await mgr.disconnect("device-42")
 ```
+
+See [WEBSOCKET.md](WEBSOCKET.md) for full documentation.
 
 ### WebSocket↔EventBus Bridge
 
@@ -520,6 +534,38 @@ ws_bridge.bridge("system.alert", target="broadcast")
 
 await ws_bridge.start()
 await ws_bridge.stop()
+```
+
+### WSRedisBridge (Cross-Worker Relay)
+
+**Module:** `swx_core.websocket.redis_bridge`
+
+Bridges `ConnectionManager.send()` and `broadcast()` across gunicorn workers via Redis Pub/Sub, mirroring the `SSERedisBridge` architecture. Started automatically by `_WSManagerService` when `REDIS_ENABLED` and `WS_BRIDGE_ENABLED` are both true.
+
+```python
+from swx_core.websocket.redis_bridge import WSRedisBridge
+
+# Automatic — no manual setup needed. Wired by _WSManagerService.
+# Settings: WS_BRIDGE_ENABLED (default True), WS_BRIDGE_CHANNEL_PREFIX (default "swx:ws")
+```
+
+Loop prevention: `_deliver_from_redis()` never calls `_publish_to_redis()`. Redis envelopes carry `_broadcast_source="redis_ws"` and `worker_id`.
+
+### Admin WebSocket Status
+
+**Endpoint:** `GET /admin/ws/status`
+
+Returns worker ID, active connections with metadata, aggregate metrics, and Redis bridge stats.
+
+```json
+{
+  "status": "running",
+  "worker_id": 12345,
+  "active_connections": 3,
+  "connections": { "device-42": { "key": "device-42", "worker_id": 12345, "metadata": {...} } },
+  "metrics": { "opened": 5, "closed": 2, "sent": 120, "queued": 3, "failed": 1 },
+  "redis_bridge": { "running": true, "messages_published": 45, "messages_relayed": 38 }
+}
 ```
 
 ### StatsCollector

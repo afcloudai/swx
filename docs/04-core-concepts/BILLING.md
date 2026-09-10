@@ -1,6 +1,6 @@
 # Billing & Entitlements
 
-**Version:** 2.27.0  
+**Version:** 2.28.0  
 **Last Updated:** 2026-09-10
 
 ---

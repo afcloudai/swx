@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.27.0] - 2026-09-10
+
+### Added
+
+- **FR-001: Inference Health Check Protocol Method** — Added `ProviderHealthStatus` Pydantic
+  model and `health()` async method to `LLMProviderContract`. Returns structured health
+  status with `healthy`, `latency_ms`, `model_loaded`, `gpu_utilization`, `vram_used_gb`,
+  `vram_total_gb`, and `error` fields. All existing providers (OpenAI, Azure, Anthropic,
+  Ollama) now override `health()` with provider-specific diagnostics. Ollama additionally
+  queries `/api/ps` for GPU/VRAM stats when available. Default implementation falls back to
+  `health_check()` for backward compatibility with custom providers.
+
+- **FR-002: Weekly Billing Interval with Hard Reset** — Added `WeeklyWindowService` to
+  `usage_window_service.py` with `get_weekly_usage()`, `reset_weekly_usage()`,
+  `check_weekly_limit()`, and `record_weekly_usage()` methods. Implements hard-reset
+  semantics where usage resets to zero on a fixed weekly schedule (subscription anniversary
+  day) rather than rolling. Uses Redis-primary with in-memory fallback, matching the existing
+  `UsageWindowService` pattern. New settings: `QUOTA_WEEKLY_ENABLED`, `QUOTA_WEEKLY_DEFAULT_TOKENS`
+  (5M), `QUOTA_WEEKLY_TTL_DAYS` (8).
+
+- **FR-003: Compute Unit Abstraction Layer** — Added `ComputeUnitService` in
+  `compute_unit_service.py` with `ModelMultiplier` and `ComputeUnitResult` Pydantic models.
+  Converts raw token counts to compute units using configurable per-model multipliers
+  (input/output). Supports four levels (LEVEL_1 through LEVEL_4) with configurable
+  multipliers via `COMPUTE_UNIT_LEVELS` setting. Singleton via `get_compute_unit_service()`.
+
+- **FR-004: Provider Health Check Endpoint** — Added `GET /admin/llm/health/detailed` endpoint
+  returning structured per-provider health status including GPU utilization, VRAM usage,
+  model loaded status, and latency. Delegates to each provider's `health()` method for
+  rich diagnostics beyond the existing boolean `/health` endpoint.
+
+- **FR-005: Extended LLMProviderType for Self-Hosted Inference** — Added `VLLM`, `SGLANG`,
+  and `LLAMACPP` to the `LLMProviderType` enum. Created three new provider modules
+  (`vllm_provider.py`, `sglang_provider.py`, `llamacpp_provider.py`) that implement the
+  OpenAI-compatible wire protocol. Each includes `generate()`, `stream()`, `health()`,
+  `validate_api_key()`, and `list_models()`. Self-hosted providers expose GPU/VRAM stats
+  via their native health endpoints. Default provider configurations and model lists added
+  to settings.
+
+## [2.26.16] - 2026-09-09
+
+### Fixed
+
+- **Bug: `_register_router()` prefix mutation silently ignored in newer FastAPI** —
+  The v2.26.14 fix mutated `module_router.prefix` after route definitions and passed
+  `include_prefix` to `include_router()`. In newer FastAPI (0.115+), mutating
+  `APIRouter.prefix` after routes are defined does NOT affect path resolution:
+  routes defined on `APIRouter()` (no `prefix=`) with short decorator paths like
+  `@router.get("/gate/verify")` would resolve at `/api/v1/gate/verify` instead of
+  `/api/v1/fleet/gate/verify` — missing the derived prefix entirely.
+
+  Replaced the `.prefix` mutation with `_prefix_embedded_in_routes()`, a detection
+  function that inspects whether the resolved prefix is already baked into route
+  paths. When the prefix is embedded (aggregated packages with sub-router prefixes,
+  or leaf modules using `APIRouter(prefix=...)`), `include_router()` receives only
+  `include_prefix`. When the prefix is NOT embedded (leaf modules with short decorator
+  paths), `include_router()` receives `full_path` instead. This eliminates `.prefix`
+  mutation entirely and works correctly across all FastAPI versions.
+
 ## [2.26.15] - 2026-09-09
 
 ### Fixed

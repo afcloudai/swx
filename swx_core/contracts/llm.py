@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Literal
 
+from pydantic import BaseModel
+
 
 SSEEventType = Literal["text_delta", "usage", "error", "done"]
 
@@ -58,6 +60,22 @@ class ValidateProviderResult:
     error: str | None = None
 
 
+class ProviderHealthStatus(BaseModel):
+    """Structured health status for an LLM provider.
+
+    Provides richer diagnostics than a simple boolean, including latency,
+    model availability, and GPU utilisation for self-hosted inference.
+    """
+
+    healthy: bool
+    latency_ms: float | None = None
+    model_loaded: bool | None = None
+    gpu_utilization: float | None = None
+    vram_used_gb: float | None = None
+    vram_total_gb: float | None = None
+    error: str | None = None
+
+
 class LLMProviderContract(ABC):
     """Abstract interface for LLM providers."""
 
@@ -72,6 +90,19 @@ class LLMProviderContract(ABC):
     @abstractmethod
     async def health_check(self) -> bool:
         ...
+
+    async def health(self) -> ProviderHealthStatus:
+        """Check provider health and return structured status.
+
+        Default implementation delegates to :meth:`health_check` and wraps
+        the boolean result.  Subclasses should override this to provide
+        richer diagnostics (latency, model availability, GPU stats, etc.).
+        """
+        try:
+            is_healthy = await self.health_check()
+            return ProviderHealthStatus(healthy=is_healthy)
+        except Exception as exc:
+            return ProviderHealthStatus(healthy=False, error=str(exc))
 
     async def validate_api_key(self) -> ValidateProviderResult:
         """Validate that the configured API key works with this provider.

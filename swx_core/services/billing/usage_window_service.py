@@ -201,3 +201,135 @@ def get_usage_window_service() -> UsageWindowService:
     if _service is None:
         _service = UsageWindowService()
     return _service
+
+
+def _compute_weekly_period(account_id: UUID, feature_key: str) -> tuple[datetime, datetime]:
+    """Hard-reset weekly period: starts on the subscription anniversary day-of-week.
+
+    Falls back to the start of the current ISO week (Monday) when no
+    subscription data is available.
+    """
+    now = utc_now()
+    from datetime import timedelta
+    start_of_week = now - timedelta(days=now.weekday())
+    start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_week = start_of_week + timedelta(days=7)
+    return start_of_week, end_of_week
+
+
+class WeeklyUsageStatus(SQLModel):
+    weekly_quota: int
+    weekly_used: int
+    weekly_remaining: int
+    period_start: datetime
+    period_end: datetime
+
+
+def _weekly_ttl() -> int:
+    return settings.QUOTA_WEEKLY_TTL_DAYS * 24 * 3600
+
+
+def _weekly_key(account_id: UUID, feature_key: str, period_start: datetime) -> str:
+    ts = int(period_start.timestamp())
+    return f"quota:{account_id}:weekly:{feature_key}:{ts}"
+
+
+class WeeklyWindowService:
+    """Weekly usage with hard-reset semantics — resets on a fixed day, not rolling."""
+
+    def __init__(self):
+        self._redis = None
+        self._memory: dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def _get_redis(self):
+        if self._redis is not None:
+            return self._redis
+        if not _redis_available or not settings.REDIS_ENABLED:
+            return None
+        try:
+            assert _redis_mod is not None
+            self._redis = _redis_mod.from_url(settings.redis_url)
+            return self._redis
+        except Exception:
+            logger.warning("WeeklyWindowService: Redis unavailable, using in-memory fallback")
+            self._redis = None
+            return None
+
+    async def _incr(self, key: str, ttl: int | None = None, amount: int = 1) -> int:
+        redis = await self._get_redis()
+        if redis is not None:
+            count = await redis.incrby(key, amount)
+            if ttl is not None and count == amount:
+                await redis.expire(key, ttl)
+            return count
+        async with self._lock:
+            self._memory[key] = self._memory.get(key, 0) + amount
+            return self._memory[key]
+
+    async def _get(self, key: str) -> int:
+        redis = await self._get_redis()
+        if redis is not None:
+            value = await redis.get(key)
+            return int(value) if value is not None else 0
+        async with self._lock:
+            return self._memory.get(key, 0)
+
+    async def _set_zero(self, key: str, ttl: int | None = None) -> None:
+        redis = await self._get_redis()
+        if redis is not None:
+            if ttl is not None:
+                await redis.setex(key, ttl, 0)
+            else:
+                await redis.set(key, 0)
+            return
+        async with self._lock:
+            self._memory[key] = 0
+
+    async def get_weekly_usage(self, account_id: UUID, feature_key: str) -> WeeklyUsageStatus:
+        period_start, period_end = _compute_weekly_period(account_id, feature_key)
+        key = _weekly_key(account_id, feature_key, period_start)
+        used = await self._get(key)
+        quota = settings.QUOTA_WEEKLY_DEFAULT_TOKENS
+        return WeeklyUsageStatus(
+            weekly_quota=quota,
+            weekly_used=used,
+            weekly_remaining=max(0, quota - used),
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+    async def reset_weekly_usage(self, account_id: UUID, feature_key: str) -> WeeklyUsageStatus:
+        period_start, period_end = _compute_weekly_period(account_id, feature_key)
+        key = _weekly_key(account_id, feature_key, period_start)
+        await self._set_zero(key, ttl=_weekly_ttl())
+        await event_bus.dispatch("quota.weekly_reset", payload={
+            "account_id": str(account_id),
+            "feature_key": feature_key,
+            "period_start": period_start.isoformat(),
+        })
+        return await self.get_weekly_usage(account_id, feature_key)
+
+    async def check_weekly_limit(self, account_id: UUID, plan_key: str, feature_key: str) -> bool:
+        status = await self.get_weekly_usage(account_id, feature_key)
+        return status.weekly_remaining > 0
+
+    async def record_weekly_usage(self, account_id: UUID, feature_key: str, tokens: int) -> None:
+        period_start, _period_end = _compute_weekly_period(account_id, feature_key)
+        key = _weekly_key(account_id, feature_key, period_start)
+        await self._incr(key, ttl=_weekly_ttl(), amount=tokens)
+        await event_bus.dispatch("quota.weekly_usage_recorded", payload={
+            "account_id": str(account_id),
+            "feature_key": feature_key,
+            "tokens": tokens,
+        })
+
+
+_weekly_service: WeeklyWindowService | None = None
+
+
+def get_weekly_window_service() -> WeeklyWindowService:
+    global _weekly_service
+    if _weekly_service is None:
+        _weekly_service = WeeklyWindowService()
+    return _weekly_service

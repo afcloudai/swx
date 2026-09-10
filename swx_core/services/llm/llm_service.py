@@ -16,7 +16,7 @@ from swx_core.security.encryption import encrypt_value
 from swx_core.services.llm.provider_factory import clear_cache as clear_provider_cache, create_provider, get_provider_chain
 from swx_core.services.llm.providers import LLMRequest
 from swx_core.services.llm.resilience import CircuitBreakerRegistry, call_with_timeout, retry_with_backoff
-from swx_core.contracts.llm import SSEEvent, ValidateProviderResult
+from swx_core.contracts.llm import SSEEvent, ValidateProviderResult, ProviderHealthStatus
 
 
 def _provider_public(config) -> LLMProviderConfigPublic:
@@ -141,6 +141,32 @@ async def health_check_all(session: AsyncSession) -> dict[str, bool]:
             results[f"{config.name}:{config.model_name}"] = await provider.health_check() if provider else False
         except Exception:
             results[f"{config.name}:{config.model_name}"] = False
+    return results
+
+
+async def health_check_detailed(session: AsyncSession) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for config in await llm_provider_repository.get_all(session, active_only=False):
+        try:
+            provider = create_provider(config)
+            if provider is None:
+                results.append({"name": config.name, "provider": config.provider, "model": config.model_name, "healthy": False, "error": f"Unknown provider type: {config.provider}"})
+                continue
+            status = await provider.health()
+            results.append({
+                "name": config.name,
+                "provider": config.provider,
+                "model": config.model_name,
+                "healthy": status.healthy,
+                "latency_ms": status.latency_ms,
+                "model_loaded": status.model_loaded,
+                "gpu_utilization": status.gpu_utilization,
+                "vram_used_gb": status.vram_used_gb,
+                "vram_total_gb": status.vram_total_gb,
+                "error": status.error,
+            })
+        except Exception as exc:
+            results.append({"name": config.name, "provider": config.provider, "model": config.model_name, "healthy": False, "error": str(exc)})
     return results
 
 

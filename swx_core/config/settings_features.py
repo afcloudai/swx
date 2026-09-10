@@ -72,6 +72,18 @@ class FeaturesSettingsMixin(BaseSettings):
         default=["llama3.2", "mistral", "codellama"],
         description="Fallback model list for Ollama when API listing unavailable",
     )
+    LLM_DEFAULT_MODELS_VLLM: list[str] = Field(
+        default=["meta-llama/Meta-Llama-3.1-8B-Instruct"],
+        description="Fallback model list for vLLM when API listing unavailable",
+    )
+    LLM_DEFAULT_MODELS_SGLANG: list[str] = Field(
+        default=["meta-llama/Meta-Llama-3.1-8B-Instruct"],
+        description="Fallback model list for SGLang when API listing unavailable",
+    )
+    LLM_DEFAULT_MODELS_LLAMACPP: list[str] = Field(
+        default=["default"],
+        description="Fallback model list for llama.cpp when API listing unavailable",
+    )
     SWX_SERVICE_TOKEN: str | None = Field(
         default=None,
         description="Shared secret for service-to-service auth via X-Service-Token header",
@@ -192,9 +204,35 @@ class FeaturesSettingsMixin(BaseSettings):
         description="Per-model nano pricing for usage metering (input/output per token)",
     )
 
+    COMPUTE_UNIT_LEVELS: dict = Field(
+        default_factory=lambda: {
+            "LEVEL_1": {"label": "Light", "input_multiplier": 0.5, "output_multiplier": 0.5},
+            "LEVEL_2": {"label": "Standard", "input_multiplier": 1.0, "output_multiplier": 1.0},
+            "LEVEL_3": {"label": "Heavy", "input_multiplier": 2.0, "output_multiplier": 2.0},
+            "LEVEL_4": {"label": "Premium", "input_multiplier": 5.0, "output_multiplier": 5.0},
+        },
+        description="Compute unit level definitions with multipliers",
+    )
+    COMPUTE_UNIT_DEFAULT_LEVEL: str = Field(
+        default="LEVEL_2", description="Default compute unit level for models not in the multiplier table"
+    )
+    COMPUTE_UNIT_DECIMALS: int = Field(
+        default=0, description="Decimal places for compute unit rounding (0 = integer CUs)"
+    )
+
     QUOTA_MONTHLY_TTL_DAYS: int = Field(default=32, description="TTL in days for monthly quota Redis keys")
     QUOTA_DAILY_TTL_HOURS: int = Field(default=36, description="TTL in hours for daily reset counter Redis keys")
     QUOTA_WINDOW_TTL_BUFFER_HOURS: int = Field(default=1, description="Extra hours added to window key TTL as buffer")
+
+    QUOTA_WEEKLY_ENABLED: bool = Field(
+        default=True, description="Enable weekly hard-reset usage windows alongside rolling windows"
+    )
+    QUOTA_WEEKLY_DEFAULT_TOKENS: int = Field(
+        default=5_000_000, description="Default weekly token quota (hard-reset on subscription anniversary)"
+    )
+    QUOTA_WEEKLY_TTL_DAYS: int = Field(
+        default=8, description="TTL in days for weekly quota Redis keys (buffer beyond 7 days)"
+    )
     WEBHOOK_IDEMPOTENCY_TTL: int = Field(default=604800, description="TTL in seconds for webhook idempotency Redis keys (default: 7 days)")
     WEBHOOK_RETENTION_DAYS: int = Field(default=30, description="Days to retain inbound webhook delivery records")
 

@@ -8,8 +8,11 @@ from swx_core.services.llm.config_resolver import resolve_api_key, resolve_confi
 from swx_core.services.llm.providers import BaseLLMProvider
 from swx_core.services.llm.providers.anthropic_provider import AnthropicProvider
 from swx_core.services.llm.providers.azure_provider import AzureProvider
+from swx_core.services.llm.providers.llamacpp_provider import LlamaCppProvider
 from swx_core.services.llm.providers.ollama_provider import OllamaProvider
 from swx_core.services.llm.providers.openai_provider import OpenAIProvider
+from swx_core.services.llm.providers.sglang_provider import SGLangProvider
+from swx_core.services.llm.providers.vllm_provider import VLLMProvider
 
 _provider_cache: dict[str, BaseLLMProvider] = {}
 _chain_cache: dict[str, tuple[list[tuple[BaseLLMProvider, LLMProviderConfig]], float]] = {}
@@ -61,6 +64,23 @@ def create_provider(config: LLMProviderConfig) -> BaseLLMProvider | None:
         provider = OllamaProvider(str(credentials.get("base_url", "http://localhost:11434")), str(credentials.get("api_key", "")) or None, provider_config)
     elif provider_type == LLMProviderType.ANTHROPIC:
         provider = AnthropicProvider(str(credentials.get("api_key", "")), provider_config)
+    elif provider_type == LLMProviderType.VLLM:
+        provider = VLLMProvider(
+            base_url=str(credentials.get("base_url", "http://localhost:8000")),
+            api_key=str(credentials.get("api_key", "")) or None,
+            provider_config=provider_config,
+        )
+    elif provider_type == LLMProviderType.SGLANG:
+        provider = SGLangProvider(
+            base_url=str(credentials.get("base_url", "http://localhost:30000")),
+            api_key=str(credentials.get("api_key", "")) or None,
+            provider_config=provider_config,
+        )
+    elif provider_type == LLMProviderType.LLAMACPP:
+        provider = LlamaCppProvider(
+            base_url=str(credentials.get("base_url", "http://localhost:8080")),
+            provider_config=provider_config,
+        )
     if provider is not None:
         _provider_cache[cache_key] = provider
     return provider

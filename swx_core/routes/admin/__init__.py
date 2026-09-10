@@ -30,6 +30,7 @@ from .user_role_route import router as user_role_router
 from .user_route import router as user_router
 from .wallet_adjustment_route import router as wallet_adjustment_router
 from .webhook_route import router as webhook_router
+from .ws_route import router as ws_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -60,3 +61,4 @@ router.include_router(status_router)
 router.include_router(data_transfer_router)
 router.include_router(feature_flag_router)
 router.include_router(wallet_adjustment_router)
+router.include_router(ws_router)

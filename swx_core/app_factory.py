@@ -248,6 +248,59 @@ class _SSEManagerService(LifecycleService):
             await manager.stop()
 
 
+class _WSManagerService(LifecycleService):
+    """Start and stop the WebSocket connection manager and its Redis bridge."""
+
+    name = "ws_manager"
+
+    def __init__(self) -> None:
+        self._bridge: Any = None
+
+    async def start(self) -> None:
+        from swx_core.websocket.manager import ConnectionManager
+
+        manager = ConnectionManager.get_instance()
+        if manager is not None:
+            await manager.start()
+
+        if not settings.REDIS_ENABLED or not settings.WS_BRIDGE_ENABLED:
+            return
+
+        from swx_core.container.container import get_container
+        from swx_core.websocket.redis_bridge import WSRedisBridge
+
+        container = get_container()
+        redis_client = None
+        if container.bound("redis.client"):
+            try:
+                redis_client = container.make("redis.client")
+            except Exception as exc:
+                logger.warning("ws.redis_bridge.redis_unavailable %s", exc)
+                return
+
+        if redis_client is not None and manager is not None:
+            bridge = WSRedisBridge(
+                ws_manager=manager,
+                redis_client=redis_client,
+                channel_prefix=settings.WS_BRIDGE_CHANNEL_PREFIX,
+            )
+            await bridge.start()
+            manager._redis_bridge = bridge
+            self._bridge = bridge
+            logger.info("ws.redis_bridge.wired")
+
+    async def stop(self) -> None:
+        if self._bridge is not None:
+            await self._bridge.stop()
+            self._bridge = None
+
+        from swx_core.websocket.manager import ConnectionManager
+        manager = ConnectionManager.get_instance()
+        if manager is not None:
+            manager._redis_bridge = None
+            await manager.stop()
+
+
 class _CacheRefreshService(_AsyncTaskService):
     name = "cache_refresh"
 
@@ -463,6 +516,7 @@ def create_swx_app(
     lifecycle.register(_SessionCleanupService())
     lifecycle.register(_CacheRefreshService())
     lifecycle.register(_SSEManagerService())
+    lifecycle.register(_WSManagerService())
 
     if lifecycle_services:
         for svc in lifecycle_services:
@@ -498,6 +552,10 @@ def create_swx_app(
 
     sse_manager = SSEManager.create(stats=realtime_stats)
     app.state.sse_manager = sse_manager
+
+    from swx_core.websocket.manager import ConnectionManager
+    ws_manager = ConnectionManager.create(stats=realtime_stats)
+    app.state.ws_manager = ws_manager
 
     if graceful_shutdown is not None:
         app.state.graceful_shutdown = graceful_shutdown

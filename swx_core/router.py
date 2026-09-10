@@ -26,6 +26,45 @@ if sys.platform == "win32":
 router = APIRouter()
 
 
+def _prefix_embedded_in_routes(module_router: APIRouter, prefix: str) -> bool:
+    """Check whether *prefix* is already embedded in the module router's route paths.
+
+    When ``APIRouter(prefix=...)`` is used at construction time, FastAPI bakes
+    the prefix into each route's ``.path`` attribute.  Similarly, when decorators
+    like ``@router.get("/admin/audit/")`` embed the full path, the prefix is
+    already present.  In both cases, passing the full prefix to
+    ``include_router()`` would cause double-prefixing.
+
+    Returns True when the prefix is already present (``include_router()`` should
+    receive *include_prefix* only).  Returns False when the prefix must come
+    from ``include_router()`` (pass *full_path* instead).
+    """
+    if not prefix:
+        return True  # No prefix → no double-prefix risk
+
+    # Router created with prefix= at construction → routes have it baked in
+    if module_router.prefix:
+        return True
+
+    # Aggregated package (all entries are sub-router inclusions) → sub-routers
+    # have their own prefixes baked in
+    if module_router.routes and all(
+        hasattr(r, "include_context") for r in module_router.routes
+    ):
+        return True
+
+    # Leaf module: check if any direct route path starts with the prefix
+    prefix_stripped = prefix.strip("/")
+    for route in module_router.routes:
+        if hasattr(route, "include_context"):
+            continue  # Skip sub-router inclusions
+        path = getattr(route, "path", "").strip("/")
+        if path.startswith(prefix_stripped):
+            return True  # At least one route already has the prefix
+
+    return False  # No route embeds the prefix → include_router must supply it
+
+
 def _register_router(
     module_router: APIRouter,
     module,
@@ -45,9 +84,11 @@ def _register_router(
     value.  Setting ``ROUTE_PREFIX = ""`` in a module disables auto-
     derivation and mounts the router at the ``include_prefix`` root.
 
-    Calls ``main_router.include_router(...)`` with ``prefix=include_prefix``
-    and sets ``module_router.prefix`` so FastAPI composes the full path
-    correctly for aggregated packages with sub-routers.
+    Detects whether the resolved prefix is already embedded in route paths
+    (via ``APIRouter(prefix=...)`` or decorator paths) and chooses the
+    correct ``include_router()`` prefix argument accordingly, avoiding
+    double-prefixing for aggregated packages and under-prefixing for leaf
+    modules with short decorator paths.
     """
     module_prefix = getattr(module, "ROUTE_PREFIX", None)
     prefix_explicitly_set = module_prefix is not None
@@ -77,16 +118,22 @@ def _register_router(
         if user_defined_prefix.startswith(version_prefix):
             user_defined_prefix = user_defined_prefix[len(version_prefix):]
 
-    module_router.prefix = user_defined_prefix
-
     full_path = f"{include_prefix}{user_defined_prefix}"
     tag_parts = [part.capitalize() for part in full_path.split("/") if part]
     tag_prefix = "Core API" if is_core else "User API"
     kind = "WS" if ws else "route"
     tag = f"{tag_prefix} - {' - '.join(tag_parts)}"
 
+    # Determine whether the prefix is already embedded in route paths.
+    # If so, include_router() only needs include_prefix; otherwise it needs
+    # the full path to compose the correct URL.
+    if _prefix_embedded_in_routes(module_router, user_defined_prefix):
+        effective_prefix = include_prefix
+    else:
+        effective_prefix = full_path
+
     try:
-        main_router.include_router(module_router, prefix=include_prefix, tags=[tag])
+        main_router.include_router(module_router, prefix=effective_prefix, tags=[tag])
         print(f"✅ Registered {kind}: '{full_module_name}' → '{full_path}' with tag '{tag}'")
     except Exception as e:
         print(f"❌ ERROR: Failed to register {kind} from '{full_module_name}': {e}")

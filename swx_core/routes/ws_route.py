@@ -9,6 +9,11 @@ in ``swx_core.router`` mounts it alongside HTTP routes from the same module.
 Modules that wish to expose their own WebSocket routes should likewise define
 a ``websocket_router`` attribute — an ``APIRouter`` with ``@router.websocket``
 endpoints.
+
+The route resolves the ``ConnectionManager`` singleton at request time
+(via ``get_instance()``) so it always gets the manager created by the
+lifespan startup — even under gunicorn pre-fork where a module-level
+instance would carry an empty ``_connections`` dict.
 """
 
 from __future__ import annotations
@@ -16,8 +21,6 @@ from __future__ import annotations
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from swx_core.websocket.manager import ConnectionManager
-
-ws_manager = ConnectionManager()
 
 websocket_router = APIRouter()
 
@@ -30,12 +33,17 @@ async def ws_endpoint(websocket: WebSocket, device_id: str) -> None:
     inbound messages until the client disconnects.  On reconnect, any
     messages queued while offline are automatically drained.
     """
-    await ws_manager.connect(device_id, websocket)
+    mgr = ConnectionManager.get_instance()
+    if mgr is None:
+        await websocket.close(code=1011, reason="WebSocket manager not initialised")
+        return
+
+    await mgr.connect(device_id, websocket, metadata={"transport": "ws"})
     try:
         while True:
             data = await websocket.receive_text()
-            await ws_manager.handle_message(device_id, data)
+            await mgr.handle_message(device_id, data)
     except WebSocketDisconnect:
         pass
     finally:
-        await ws_manager.disconnect(device_id)
+        await mgr.disconnect(device_id)

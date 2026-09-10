@@ -308,3 +308,13 @@ class InfraSettingsMixin(BaseSettings):
         default="swx:sse",
         description="Redis channel prefix for SSE broadcast (default: 'swx:sse')",
     )
+
+    # WS Bridge Configuration (Redis Pub/Sub for cross-worker WebSocket delivery)
+    WS_BRIDGE_ENABLED: bool = Field(
+        default=True,
+        description="Enable cross-worker WebSocket message relay via Redis Pub/Sub (requires REDIS_ENABLED)",
+    )
+    WS_BRIDGE_CHANNEL_PREFIX: str = Field(
+        default="swx:ws",
+        description="Redis channel prefix for WebSocket relay (default: 'swx:ws')",
+    )

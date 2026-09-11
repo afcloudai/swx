@@ -85,6 +85,7 @@ class WSBridge:
             try:
                 key = target(ev) if callable(target) else target
                 if not key:
+                    logger.warning("ws.bridge_skipped event=%s reason=empty_target resolver=%s", ev.name, target if isinstance(target, str) else "<dynamic>")
                     return
 
                 message = json.dumps({"event": ev.name, "payload": ev.payload}, default=str)

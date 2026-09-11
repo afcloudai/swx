@@ -90,6 +90,10 @@ class SSEBridge:
             try:
                 ch = channel(ev) if callable(channel) else channel
 
+                if not ch:
+                    logger.warning("sse.bridge_skipped event=%s reason=empty_channel resolver=%s", ev.name, channel if isinstance(channel, str) else "<dynamic>")
+                    return
+
                 serialized = self._serializers.serialize(ev.name, ev.payload)
                 if event_type is not None:
                     serialized["event"] = event_type

@@ -150,6 +150,10 @@ class SSERedisBridge:
         if self._redis is None:
             return
 
+        if not channel:
+            logger.warning("sse.redis_bridge.publish_skipped reason=empty_channel")
+            return
+
         message = {
             "channel": channel,
             "data": data,
@@ -224,7 +228,7 @@ class SSERedisBridge:
             event_data = data.get("data")
 
             if not channel or not event_data:
-                logger.warning("sse.redis_bridge.malformed_message channel=%s", channel)
+                logger.warning("sse.redis_bridge.malformed_message channel=%s has_data=%s", channel, bool(event_data))
                 return
 
             await self._sse._deliver_from_redis(channel, event_data)

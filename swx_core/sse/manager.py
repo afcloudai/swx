@@ -191,6 +191,10 @@ class SSEManager:
         Returns the number of local subscribers that received the event
         (or were skipped because their queue was full).
         """
+        if not channel:
+            logger.warning("sse.broadcast_skipped reason=empty_channel")
+            return 0
+
         # Events arriving from Redis must not be re-published (loop prevention).
         from_redis = data.get(SOURCE_META_KEY) == SOURCE_REDIS_SSE
         if from_redis:

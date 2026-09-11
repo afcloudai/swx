@@ -151,6 +151,10 @@ class WSRedisBridge:
         if self._redis is None:
             return
 
+        if not action:
+            logger.warning("ws.redis_bridge.publish_skipped reason=empty_action worker=%d", _WORKER_ID)
+            return
+
         payload: Dict[str, Any] = {
             "action": action,
             "key": key,
@@ -238,7 +242,11 @@ class WSRedisBridge:
             source_worker = data.get("worker_id")
 
             if not action or not msg:
-                logger.warning("ws.redis_bridge.malformed_message action=%s worker=%d", action, _WORKER_ID)
+                logger.warning("ws.redis_bridge.malformed_message action=%s has_msg=%s worker=%d", action, bool(msg), _WORKER_ID)
+                return
+
+            if action == "send" and not key:
+                logger.warning("ws.redis_bridge.malformed_send reason=empty_key worker=%d", _WORKER_ID)
                 return
 
             await self._ws._deliver_from_redis(action, key, msg, exclude=exclude)

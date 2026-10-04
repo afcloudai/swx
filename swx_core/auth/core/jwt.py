@@ -13,6 +13,7 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional, Dict, Any
+from uuid import uuid4
 
 from swx_core.config.settings import settings
 
@@ -55,11 +56,14 @@ def create_token(
         secret_key = settings.SECRET_KEY
 
     expire = datetime.now(timezone.utc) + expires_delta
+    now = datetime.now(timezone.utc)
     to_encode: Dict[str, Any] = {
         "exp": expire.timestamp(),
+        "iat": now.timestamp(),
         "sub": subject,
         "aud": audience.value,
         "auth_provider": auth_provider,
+        "jti": uuid4().hex,
     }
 
     if scopes:

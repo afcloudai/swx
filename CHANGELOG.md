@@ -2,6 +2,125 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.0] - 2026-10-04
+
+### Security (Critical)
+
+- **API-key scopes are now enforced** — `APIKeyGuard.authenticate()` previously built
+  `AuthenticatedUser(permissions=[])`: every scope row in `swx_api_key_scope` was stored
+  and rotatable but never checked, so a read-only-scoped key could call any endpoint the
+  guard covered. The guard now loads active scopes via the service layer and maps them
+  onto `permissions` as `resource:action` strings, and new dependencies
+  `require_scope()` / `require_any_scope()` (`swx_core.guards.scopes`) enforce them
+  wildcard-aware on the granted side. A key with no scopes now only reaches endpoints
+  that require no permission/scope.
+- **API keys are header-only by default** — `APIKeyGuard(query_param="api_key")` accepted
+  keys as URL query parameters, leaking them into access logs, proxies, browser history,
+  and referrer headers. The default is now header-only; legacy query transport is opt-in
+  via the new `API_KEY_QUERY_PARAM` setting (or `query_param=` constructor arg).
+- **RLS helper no longer interpolates SQL** — `database/rls.py` interpolated tenant ID
+  into `SET LOCAL` statements. Rewritten around `set_config` with bind parameters where a
+  SQLAlchemy connection is available, canonical-UUID/bool validation + fixed-key assembly
+  on the raw DBAPI checkout path, and a `checkin` RESET so pooled connections never carry
+  stale tenant context. Also adds `tenant_rls_policy_sql()` for per-table policy DDL and
+  fixes the dead `connect`-event listener (it ran outside any transaction, so `SET LOCAL`
+  was a no-op).
+- **Session middleware secure defaults + configuration** — `SessionMiddleware` was
+  hard-coded (`max_age=86400`, `same_site="lax"`, `https_only=False`) with no knobs.
+  New `SESSION_MAX_AGE`, `SESSION_SAME_SITE`, and `HTTPS_ONLY` settings — `HTTPS_ONLY`
+  defaults to `True` in production/staging via `ENVIRONMENT`, `False` locally (explicit
+  override available).
+- **Password-reset tokens are revocable** — reset JWTs previously carried no `jti`, so
+  they were unaddressable: old reset links stayed valid until expiry (up to 48h) after
+  the password changed. All framework JWTs now carry `jti`+`iat`; `verify_password_reset_token()`
+  consults the token blacklist (jti lookup + email-keyed user-level revocation via the new
+  `swx_core.security.password_reset_registry`), and both `reset_password_service()` and
+  `update_password_service()` revoke every outstanding reset link for the user on
+  successful password change. Verification fails closed on registry outages.
+- **Fail-closed RBAC variant** — `has_permission()` bakes in an `is_superuser` bypass
+  (discouraged for hard boundaries). New `has_permission_strict()` helper and
+  `require_permission_strict()` dependency provide the no-bypass variant; the framework
+  now supplies the fail-closed pattern downstream consumers were hand-rolling incorrectly.
+
+### Fixed
+
+- **DB engine lifecycle is fork-safe and reset-correct** — `AsyncSessionLocal`/`SessionLocal`
+  bound the engine at import time, so `reset_engine()` left session factories attached to a
+  disposed engine. Session factories now lazily rebind (callable `_LazySessionFactory`), and
+  `get_async_engine()`/`get_engine()` self-heal on pid change: a process that forked after
+  pool creation discards the parent's engines and rebuilds. `reset_engine()` documentation
+  now states the fork/worker contract explicitly.
+- **`APIKeyGuard` session resolution repaired** — `authenticate()` read
+  `request.state.db_session`/`app.state.db_session`, which nothing in the framework ever
+  set, so stock deployments failed closed. The guard now falls back to the container-scoped
+  `db.session` binding, and `validate_token()`/`revoke_token()` accept an optional
+  request-scoped session (standalone session only as documented fallback). Revocation now
+  routes through `api_key_service.revoke_api_key()` (audit + events) instead of touching
+  the repository directly.
+- **`check_celery` health check fallback** — previously read a nonexistent
+  `settings.celery_app` attribute and always reported degraded; it now falls back to the
+  shipped Celery factory (`swx_core.jobs.get_celery_app()`).
+
+### Added
+
+- **API-key environments (`test`/`live`)** — `ApiKey.environment` column (Stripe-style
+  separation) with `ApiKeyEnvironment` enum on model/schemas, propagation through
+  create/rotate/validate/list/analytics, exposure in guard metadata, and migration
+  template `swx_core/database/migrations/v2_22_19_add_api_key_environment.py`.
+- **Celery worker factory** — `swx_core.jobs` ships `create_celery_app()` /
+  `get_celery_app()` honoring `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`/Redis settings,
+  fulfilling the `[jobs]` extra contract. Consumers no longer hand-roll their app factory.
+- **Scope-checking dependencies** — `require_scope(scope)` and
+  `require_any_scope(*scopes, all_required=, optional=)` in `swx_core.guards.scopes`,
+  exported from `swx_core.guards`.
+
+### Changed
+
+- **Single boot path** — `swx_core/main.py` previously ran a 12-step hard-coded lifespan
+  alongside `app_factory.create_swx_app`'s `LifecycleManager` path; the two had begun to
+  drift. `main.py` now delegates to `create_swx_app()`; the recursion-limit startup step
+  moved into the factory's lifespan. Only `create_swx_app` remains as the canonical entry.
+- **Settings single source of truth** — `settings.py` re-declared ~66 module-level
+  constants next to the mixin fields (some hard-coded literals, some import-time
+  snapshots), with `extra="ignore"` making env typos silent. COMPLIANCE_*/GDPR_*/
+  NOTIFICATION_* blocks moved into `ComplianceSettingsMixin`/`FeaturesSettingsMixin`, and
+  every module-level constant is now an alias onto the `settings` instance — env/DB
+  overrides of `API_KEY_*`, `WEBHOOK_*`, etc. are no longer silently ignored by services
+  that imported the constants.
+- **Team stack status documented** — the Team models/services are kept (they anchor
+  tenant scoping: `ApiKey.team_id`, RLS template, personal-team hooks) but marked as
+  superseded by the Organization stack for new SaaS projects in `models/team.py`.
+
+### Migration Notes
+
+- `API_KEY_QUERY_PARAM` defaults to empty (header-only). Copy
+  `v2_22_19_add_api_key_environment.py` into your project migrations and set
+  `down_revision` before `alembic upgrade head`.
+- `verify_password_reset_token()` now consults the revocation registry when a blacklist
+  is bound; pass `check_blacklist=False` only for offline tooling.
+- Prefer `require_permission_strict()` on new security-sensitive routes.
+
+## [2.28.2] - 2026-09-21
+
+### Fixed
+
+- **RecursionError from bare UUID foreign_key fields** — `erasure_certificate.user_id`,
+  `erasure_certificate.request_id`, `social_account.user_id`, and `mfa.user_id` used
+  `Field(foreign_key="...")` without an explicit `sa_column`. SQLModel delegates to
+  SQLAlchemy's type coercion which creates infinite recursion in
+  `TypeEngine._cached_result_processor` for UUID types, crashing any query that touches
+  these models. All four fields now use explicit `sa_column=Column(PG_UUID(as_uuid=True),
+  ForeignKey("..."))` with correct nullable and index flags. (P0 production crash)
+
+### Added
+
+- **Configurable Python recursion limit** — New `PYTHON_RECURSION_LIMIT` setting in
+  `InfraSettingsMixin` (default: 2000). Applied at application startup via
+  `sys.setrecursionlimit()` before any database operations. Defense-in-depth: even if
+  another unexpected recursion path is hit in SQLAlchemy type resolution, the worker
+  process won't crash with the default 1000 limit. Configurable via `PYTHON_RECURSION_LIMIT`
+  environment variable without code changes.
+
 ## [2.27.0] - 2026-09-10
 
 ### Added

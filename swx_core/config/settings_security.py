@@ -9,6 +9,7 @@ lockout controls.
 """
 
 import secrets
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -38,4 +39,21 @@ class SecuritySettingsMixin(BaseSettings):
     PASSWORD_RESET_SECRET_KEY: str = Field(
         default_factory=lambda: secrets.token_urlsafe(32),
         description="Secret key for password reset tokens (separate from access tokens)",
+    )
+
+    # Session Cookie (Starlette SessionMiddleware — SOC 2 CC6.1)
+    SESSION_MAX_AGE: int = Field(
+        default=86400,
+        description="Session cookie lifetime in seconds (default 1 day)",
+    )
+    SESSION_SAME_SITE: Literal["lax", "strict", "none"] = Field(
+        default="lax",
+        description="Session cookie SameSite policy",
+    )
+    HTTPS_ONLY: bool | None = Field(
+        default=None,
+        description=(
+            "Set the Secure flag on the session cookie. "
+            "Default (None) derives from ENVIRONMENT: True in production/staging, False locally."
+        ),
     )

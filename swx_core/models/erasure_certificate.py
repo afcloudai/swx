@@ -3,7 +3,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, String, Text, func
+from sqlalchemy import Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import Field, SQLModel
 
 from swx_core.models.base import Base
@@ -11,10 +12,12 @@ from swx_core.utils.time import utc_now
 
 
 class ErasureCertificateBase(Base):
-    user_id: uuid.UUID = Field(foreign_key="swx_users.id", index=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("swx_users.id"), nullable=False, index=True),
+    )
     request_id: uuid.UUID | None = Field(
         default=None,
-        foreign_key="swx_data_subject_request.id",
+        sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("swx_data_subject_request.id"), nullable=True),
         description="Linked data subject request, if any",
     )
     erasure_type: str = Field(

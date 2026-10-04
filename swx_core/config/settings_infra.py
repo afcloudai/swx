@@ -318,3 +318,11 @@ class InfraSettingsMixin(BaseSettings):
         default="swx:ws",
         description="Redis channel prefix for WebSocket relay (default: 'swx:ws')",
     )
+
+    # Python Recursion Limit
+    PYTHON_RECURSION_LIMIT: int = Field(
+        default=2000,
+        description="Python recursion limit applied at startup via sys.setrecursionlimit(). "
+        "SQLAlchemy with SQLModel UUID type coercion can exceed the default 1000. "
+        "Recommended: 2000–5000 for production.",
+    )

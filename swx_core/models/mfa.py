@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 from sqlmodel import Field, SQLModel
 from swx_core.models.base import Base
@@ -9,7 +10,9 @@ from swx_core.utils.time import utc_now
 
 
 class MfaRecoveryCodeBase(Base):
-    user_id: uuid.UUID = Field(foreign_key="swx_users.id", index=True)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("swx_users.id"), nullable=False, index=True),
+    )
     code_hash: str = Field(max_length=255)
     used_at: Optional[datetime] = Field(
         default=None,

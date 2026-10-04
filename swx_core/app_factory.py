@@ -327,6 +327,10 @@ def _build_lifespan(
     async def lifespan(app: FastAPI):  # type: ignore[misc]
         logger.info("lifespan.starting")
 
+        # --- Recursion limit (SQLAlchemy UUID type resolution exceeds default 1000) ---
+        import sys
+        sys.setrecursionlimit(settings.PYTHON_RECURSION_LIMIT)
+
         # --- Startup hook (env-specific setup, dev warnings, etc.) ---
         if on_startup is not None:
             result = on_startup(app)

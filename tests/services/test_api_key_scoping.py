@@ -24,6 +24,7 @@ class TestApiKeyEvents:
             hashed_key="abc123", user_id=user_id, is_active=True,
             expires_at=None, rate_limit_override=None,
             metadata_={}, created_at=now, updated_at=now,
+            environment="live",
         )
 
         with patch.object(api_key_service, "repo") as mock_repo:
@@ -58,6 +59,7 @@ class TestApiKeyEvents:
                 user_id=user_id, is_active=True,
                 expires_at=None, last_used_at=None,
                 rate_limit_override=None, created_at=now, updated_at=now,
+                environment="live",
             ))
             mock_repo.deactivate_api_key = AsyncMock(return_value=deactivated)
             with patch.object(event_bus, "dispatch", new_callable=AsyncMock) as mock_dispatch:
@@ -78,6 +80,7 @@ class TestApiKeyEvents:
             user_id=user_id, is_active=True,
             rate_limit_override=None, expires_at=None,
             last_used_at=None, created_at=now, updated_at=now,
+            environment="live",
         )
 
         with patch.object(api_key_service, "repo") as mock_repo:
@@ -88,6 +91,7 @@ class TestApiKeyEvents:
                 user_id=user_id, is_active=True,
                 expires_at=None, last_used_at=None,
                 rate_limit_override=None, created_at=now, updated_at=now,
+                environment="live",
             ))
             mock_repo.add_scopes = AsyncMock(return_value=[])
             with patch.object(event_bus, "dispatch", new_callable=AsyncMock) as mock_dispatch:
@@ -108,6 +112,7 @@ class TestApiKeyEvents:
             user_id=user_id, is_active=True,
             expires_at=None, last_used_at=None,
             rate_limit_override=None, created_at=now, updated_at=now,
+            environment="live",
         )
 
         with patch.object(api_key_service, "repo") as mock_repo:

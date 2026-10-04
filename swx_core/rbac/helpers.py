@@ -125,11 +125,31 @@ async def has_permission(
     permission_name: str,
     team_id: Optional[UUID] = None,
 ) -> bool:
-    """Check if a user has a specific permission."""
-    # Superusers have all permissions (for backward compatibility during migration)
-    if user.is_superuser:
+    """Check if a user has a specific permission.
+
+    Note:
+        Superusers bypass the permission check. For security-sensitive
+        surfaces prefer :func:`has_permission_strict`, which never bypasses.
+    """
+    if user.is_superuser:  # discouraged for hard security boundaries — see has_permission_strict
         return True
 
+    permissions = await get_user_permissions(session, user.id, team_id=team_id)
+    return permission_name in {permission.name for permission in permissions}
+
+
+async def has_permission_strict(
+    session: AsyncSession,
+    user: User,
+    permission_name: str,
+    team_id: Optional[UUID] = None,
+) -> bool:
+    """Fail-closed permission check: no superuser bypass.
+
+    Prefer this over :func:`has_permission` on security-sensitive surfaces
+    where an implicit superuser bypass is a liability (SOC 2 CC6.1 least
+    privilege). An empty/missing permission set denies.
+    """
     permissions = await get_user_permissions(session, user.id, team_id=team_id)
     return permission_name in {permission.name for permission in permissions}
 

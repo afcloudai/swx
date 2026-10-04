@@ -8,6 +8,11 @@ This enables:
 - Multi-tenant applications
 - Team-based collaboration
 - Scoped access control
+
+Status: superseded by the Organization stack for new SaaS projects.
+The framework keeps Team because it anchors tenant scoping internally
+(ApiKey.team_id, RLS template, personal-team hooks), but new consumers
+should model membership/roles via Organization/OrganizationMember.
 """
 
 import uuid

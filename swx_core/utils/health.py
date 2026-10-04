@@ -310,8 +310,8 @@ async def check_celery(celery_app=None) -> HealthStatus:
     """Check Celery worker availability."""
     try:
         if celery_app is None:
-            from swx_core.config.settings import settings
-            celery_app = getattr(settings, "celery_app", None)
+            from swx_core.jobs import get_celery_app
+            celery_app = get_celery_app()
         
         if celery_app is None:
             return HealthStatus(

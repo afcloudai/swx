@@ -39,7 +39,6 @@ class AuthServiceProvider(ServiceProvider):
 
     def _create_token_blacklist(self, app):
         """Create token blacklist with graceful Redis fallback."""
-        from swx_core.config.settings import settings
         from swx_core.security.token_blacklist import RedisTokenBlacklist
 
         redis_client = None
@@ -75,12 +74,18 @@ class AuthServiceProvider(ServiceProvider):
         )
 
     def _create_api_key_guard(self, app):
-        """Create API key guard."""
+        """Create API key guard.
+
+        Header-only by default. Query-parameter auth (``?api_key=``) is
+        opt-in via ``API_KEY_QUERY_PARAM`` because URL-carried credentials
+        leak into access logs, proxies, browser history and referrers.
+        """
+        from swx_core.config.settings import settings
         from swx_core.guards.api_key_guard import APIKeyGuard
 
         return APIKeyGuard(
             header_name="X-API-Key",
-            query_param="api_key",
+            query_param=getattr(settings, "API_KEY_QUERY_PARAM", None),
         )
 
     def _create_guard_manager(self, app):

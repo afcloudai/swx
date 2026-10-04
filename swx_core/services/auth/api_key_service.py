@@ -1,21 +1,36 @@
 import hashlib
 import secrets
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
-from swx_core.utils.time import utc_now, ensure_aware
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swx_core.config.settings import API_KEY_DEFAULT_EXPIRY_DAYS, API_KEY_MAX_EXPIRY_DAYS, API_KEY_ROTATION_GRACE_HOURS
+from swx_core.config.settings import (
+    API_KEY_DEFAULT_EXPIRY_DAYS,
+    API_KEY_MAX_EXPIRY_DAYS,
+    API_KEY_ROTATION_GRACE_HOURS,
+)
 from swx_core.events.dispatcher import event_bus
-from swx_core.services.audit_logger import AuditLogger, ActorType, AuditOutcome, AuditAction
 from swx_core.models.api_key_scope import (
-    ApiKeyCreate, ApiKeyPublic, ApiKeyPublicWithScopes, ApiKeyScopePublic, ApiKeyCreatedResponse,
+    ApiKeyCreate,
+    ApiKeyCreatedResponse,
+    ApiKeyEnvironment,
+    ApiKeyPublic,
+    ApiKeyPublicWithScopes,
+    ApiKeyScopePublic,
 )
 from swx_core.repositories import api_key_scope_repository as repo
+from swx_core.services.audit_logger import (
+    ActorType,
+    AuditAction,
+    AuditLogger,
+    AuditOutcome,
+)
 from swx_core.services.auth.api_key_scope_service import parse_scope_string
+from swx_core.utils.time import ensure_aware, utc_now
+
 
 def _normalize_scopes(scopes: list[str] | list[dict[str, str]]) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
@@ -50,6 +65,7 @@ async def create_api_key(
         "is_active": True,
         "expires_at": expires_at,
         "rate_limit_override": data.rate_limit_override,
+        "environment": data.environment.value if isinstance(data.environment, ApiKeyEnvironment) else str(data.environment),
         "metadata_": {},
     })
 
@@ -77,6 +93,7 @@ async def create_api_key(
     return ApiKeyCreatedResponse(
         id=key.id, name=key.name, key_prefix=key_prefix, raw_key=raw_key,
         scopes=scopes, expires_at=key.expires_at, created_at=key.created_at,
+        environment=key.environment,
     )
 
 async def rotate_api_key(session: AsyncSession, key_id: UUID, user_id: UUID) -> ApiKeyCreatedResponse:
@@ -92,6 +109,7 @@ async def rotate_api_key(session: AsyncSession, key_id: UUID, user_id: UUID) -> 
     new_response = await create_api_key(session, user_id, ApiKeyCreate(
         name=old_key.name, scopes=scope_dicts,
         expires_at=None, rate_limit_override=old_key.rate_limit_override,
+        environment=old_key.environment,
     ))
 
     await repo.set_rotated_from_id(session, new_response.id, old_key.id)
@@ -134,7 +152,7 @@ async def revoke_api_key(session: AsyncSession, key_id: UUID, user_id: UUID) -> 
 
     return ApiKeyPublic.model_validate(deactivated)
 
-async def validate_api_key(session: AsyncSession, raw_key: str) -> Optional[ApiKeyPublic]:
+async def validate_api_key(session: AsyncSession, raw_key: str) -> ApiKeyPublic | None:
     hashed = hashlib.sha256(raw_key.encode()).hexdigest()
     key = await repo.get_api_key_by_hash(session, hashed)
     if key is None or not key.is_active:
@@ -158,6 +176,7 @@ async def validate_api_key(session: AsyncSession, raw_key: str) -> Optional[ApiK
         rate_limit_override=key.rate_limit_override,
         rotated_from_id=key.rotated_from_id,
         is_expired=expires_at is not None and expires_at < utc_now(),
+        environment=key.environment,
         created_at=key.created_at,
         updated_at=key.updated_at,
     )
@@ -180,6 +199,7 @@ async def list_user_api_keys(session: AsyncSession, user_id: UUID, skip: int = 0
             rate_limit_override=k.rate_limit_override,
             rotated_from_id=k.rotated_from_id,
             is_expired=k.expires_at is not None and ensure_aware(k.expires_at) < now,
+            environment=k.environment,
             created_at=k.created_at,
             updated_at=k.updated_at,
         )
@@ -187,13 +207,11 @@ async def list_user_api_keys(session: AsyncSession, user_id: UUID, skip: int = 0
     ]
 
 async def get_api_key_detail(session: AsyncSession, key_id: UUID) -> ApiKeyPublicWithScopes:
-    key = await repo.get_api_key_by_id(session, key_id)
-    if key is None:
-        raise HTTPException(status_code=404, detail="API key not found")
-    scopes = await repo.get_scopes_for_key(session, key_id)
-    public = ApiKeyPublicWithScopes.model_validate(key)
-    public.scopes = [ApiKeyScopePublic.model_validate(s) for s in scopes]
-    return public
+    scopes = await get_scopes_for_key(session, key_id)  # raises 404 for unknown keys
+    public = await repo.get_api_key_by_id(session, key_id)
+    result = ApiKeyPublicWithScopes.model_validate(public)
+    result.scopes = scopes
+    return result
 
 async def update_scopes(
     session: AsyncSession, key_id: UUID, add: list[dict[str, str]], remove: list[UUID]
@@ -208,6 +226,24 @@ async def update_scopes(
     await event_bus.dispatch("api_key.scope_changed", payload={"key_id": str(key_id)})
     return await get_api_key_detail(session, key_id)
 
+async def get_scopes_for_key(session: AsyncSession, key_id: UUID) -> list[ApiKeyScopePublic]:
+    key = await repo.get_api_key_by_id(session, key_id)
+    if key is None:
+        raise HTTPException(status_code=404, detail="API key not found")
+    scopes = await repo.get_scopes_for_key(session, key_id)
+    return [ApiKeyScopePublic.model_validate(s) for s in scopes]
+
+
+async def get_key_scope_strings(session: AsyncSession, key_id: UUID) -> list[str]:
+    """Active scope strings (``resource:action``) for a key — for principal mapping.
+
+    Returns an empty list for unknown keys: callers use it during request
+    authentication, where a 404 would leak key existence.
+    """
+    scopes = await repo.get_scopes_for_key(session, key_id)
+    return [f"{s.resource}:{s.action}" for s in scopes]
+
+
 async def get_usage_analytics(session: AsyncSession, key_id: UUID) -> dict[str, Any]:
     key = await repo.get_api_key_by_id(session, key_id)
     if key is None:
@@ -220,6 +256,7 @@ async def get_usage_analytics(session: AsyncSession, key_id: UUID) -> dict[str, 
         "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
         "expires_at": key.expires_at.isoformat() if key.expires_at else None,
         "rate_limit_override": key.rate_limit_override,
+        "environment": key.environment,
         "scope_count": len(scopes),
         "scopes": [{"resource": s.resource, "action": s.action} for s in scopes],
     }

@@ -25,6 +25,7 @@ instance: consumers may `from swx_core.config.settings import X` but the
 value always comes from the environment-backed Settings fields.
 """
 
+import os
 from typing import ClassVar
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -62,6 +63,33 @@ class Settings(
         env_ignore_empty=True,
         extra="ignore",
     )
+
+    def model_post_init(self, __context) -> None:
+        # MRO note: this class-level definition shadows the mixins' hooks;
+        # super() chains them (security mixin fills dev fallback secrets).
+        super().model_post_init(__context)
+
+        # extra="ignore" hides .env typos (SECRETT_KEY boots silently). The
+        # process env is an open namespace full of unrelated system vars, so
+        # the typo check is scoped to .env — the user-owned key surface. The
+        # path must match pydantic-settings' env_file=".env" (cwd-relative);
+        # bare dotenv_values() frame-walks and resolves a different file.
+        from dotenv import dotenv_values
+
+        dotenv_path = type(self).model_config.get("env_file", ".env")
+        if not os.path.isfile(dotenv_path):
+            return
+
+        known = set(type(self).model_fields.keys())
+        unknown = sorted(set(dotenv_values(dotenv_path).keys()) - known)
+        if unknown and "PYTEST_CURRENT_TEST" not in os.environ:
+            import warnings
+
+            warnings.warn(
+                f"Unknown keys in .env will be ignored (typo?): {', '.join(unknown[:10])}"
+                + (" ..." if len(unknown) > 10 else ""),
+                stacklevel=2,
+            )
 
 
 # Instantiate settings

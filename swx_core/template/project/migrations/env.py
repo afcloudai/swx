@@ -27,6 +27,35 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# Deterministic constraint/index names so upgrades and downgrades can
+# reference constraints without depending on Postgres-assigned names.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+Base.metadata.naming_convention = NAMING_CONVENTION
+
+# Managed-schema prefixes: autogenerate only considers project tables.
+# Without this filter, a fresh snapshot against extension databases
+# (postgis/postgis) emits DROP TABLE for PostGIS/Tiger/Topology system
+# tables and the migration fails on DependentObjectsStillExistError.
+MANAGED_TABLE_PREFIXES = ("swx_", "alembic_")
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    if type_ == "table":
+        if name is None:
+            return False
+        return name.startswith(MANAGED_TABLE_PREFIXES)
+    if type_ == "index":
+        table_name = getattr(getattr(obj, "table", None), "name", None) or ""
+        return table_name.startswith(MANAGED_TABLE_PREFIXES)
+    return True
+
+
 # Set target metadata
 target_metadata = Base.metadata
 
@@ -41,6 +70,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
+        render_as_batch=True,
     )
 
     with context.begin_transaction():
@@ -68,6 +99,7 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         render_item=render_item,
+        include_object=include_object,
     )
 
     with context.begin_transaction():

@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.3] - 2026-10-05
+
+### Fixed (ledger #11–#13 — live-verified on 2.29.2)
+
+- **CSRF bootstrap deadlock (#11)** — a first-time cookie-less login 403'd under
+  `CSRF_ENABLED=true`: the middleware only mints the CSRF cookie on a
+  `needs_cookie_set` response, but the validation gate fires *before* that
+  response can ever be produced — no server path could deliver the first token.
+  Login paths are now **exempt from validation but keep minting** on their
+  response (login is pre-authentication: there is no session to forge; all
+  authenticated state-changing requests remain fully gated — double-submit
+  verified: paired → 200, unpaired → 403). `/api/auth` added to the default
+  `CSRF_LOGIN_PATHS`.
+- **`UserNewPassword.token` max_length 255 → 512 (#12)** — the HTTP
+  `POST /api/auth/password/reset` path 422'd on the framework's own reset JWTs
+  (~284 chars, live-minted), making the reset endpoint unusable end-to-end.
+- **Reset-token revocation check never awaited (#13)** — introduced in 2.29.0's
+  revocation wiring: `_reset_token_revoked` returned the registry coroutine
+  object instead of awaiting it; a coroutine is always truthy, so
+  **every** reset token verified as revoked and the entire password-reset flow
+  was dead (fail-closed by accident). `verify_password_reset_token` is now
+  async and awaits `is_reset_token_revoked`; the single service caller updated;
+  regression tests pin the async contract (iscoroutinefunction + end-to-end
+  accept/reject through the real registry with Redis).
+- **Form login reachable at `POST /api/auth/login`** (route-map) — the plain
+  form login previously lived only at `POST /api/auth/` (`@router.post("/")`),
+  while `CSRF_LOGIN_PATHS` and every doc assumed `/api/auth/login` (404 on the
+  real path). `/login` is now an explicit alias alongside `/` and `""`; all
+  three resolve to the same handler.
+
+### Verified (real-stack, docker Postgres + Redis)
+
+- Bare `POST /api/auth/login` → 200/400-range (handler ran) with `csrf_token`
+  set on the response — deadlock gone, protection intact.
+- Real 284-char reset token: minted → submitted → `verify_password_reset_token`
+  awaits registry → returns the correct email.
+
 ## [2.29.2] - 2026-10-05
 
 ### Fixed

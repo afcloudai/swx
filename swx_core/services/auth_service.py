@@ -745,7 +745,7 @@ async def reset_password_service(
             status_code=400, detail=translate(request, "invalid_or_expired_reset_token")
         )
 
-    email = verify_password_reset_token(token)
+    email = await verify_password_reset_token(token)
     if not email:
         raise HTTPException(
             status_code=400, detail=translate(request, "invalid_or_expired_reset_token")

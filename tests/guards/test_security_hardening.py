@@ -271,13 +271,47 @@ class TestResetTokenRevocation:
             password_reset_registry, "is_reset_token_revoked",
             AsyncMock(return_value=True),
         )
-        monkeypatch.setattr(
-            password_security, "_reset_token_revoked",
-            lambda token, decoded: True,
+        # End-to-end through the async wrapper: a revoked token must make
+        # verify_password_reset_token return None (was: coroutine-truthy bug
+        # in 2.29.2 that rejected every token).
+        import jwt as pyjwt
+        from swx_core.auth.core.jwt import create_token, TokenAudience
+        from datetime import timedelta
+
+        token = create_token(
+            subject="a@b.c", audience=TokenAudience.USER,
+            expires_delta=timedelta(minutes=5),
+            secret_key=password_security.settings.PASSWORD_RESET_SECRET_KEY,
         )
-        # verify returns None (invalid) when registry says revoked — fail closed is
-        # exercised via _reset_token_revoked True -> verify returns None
-        assert password_security._reset_token_revoked("t", {"jti": "x"}) is True
+        result = await password_security.verify_password_reset_token(token)
+        assert result is None
+
+    async def test_valid_token_accepts_when_not_revoked(self, monkeypatch):
+        from swx_core.security import password_security
+        from swx_core.security import password_reset_registry
+        from swx_core.auth.core.jwt import create_token, TokenAudience
+        from datetime import timedelta
+
+        monkeypatch.setattr(
+            password_reset_registry, "is_reset_token_revoked",
+            AsyncMock(return_value=False),
+        )
+        token = create_token(
+            subject="live@user.io", audience=TokenAudience.USER,
+            expires_delta=timedelta(minutes=5),
+            secret_key=password_security.settings.PASSWORD_RESET_SECRET_KEY,
+        )
+        result = await password_security.verify_password_reset_token(token)
+        assert result == "live@user.io"
+
+    async def test_wrapper_is_actually_async(self):
+        # Guard against regressing to a non-awaited coroutine (the 2.29.2 bug.
+        # A sync return of a coroutine object would fail this iscoroutinefunction check.)
+        import inspect
+        from swx_core.security import password_security
+
+        assert inspect.iscoroutinefunction(password_security._reset_token_revoked)
+        assert inspect.iscoroutinefunction(password_security.verify_password_reset_token)
 
     async def test_blacklist_unavailable_fails_open_for_read(self):
         from swx_core.security import password_reset_registry

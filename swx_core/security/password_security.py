@@ -99,7 +99,7 @@ async def generate_password_reset_token(
     )
 
 
-def verify_password_reset_token(token: str, check_blacklist: bool = True) -> str | None:
+async def verify_password_reset_token(token: str, check_blacklist: bool = True) -> str | None:
     """
     Verify and decode a password reset token.
 
@@ -129,20 +129,19 @@ def verify_password_reset_token(token: str, check_blacklist: bool = True) -> str
     except (ExpiredSignatureError, InvalidTokenError, jwt.InvalidAudienceError):
         return None  # Invalid or expired token
 
-    if check_blacklist:
-        if _reset_token_revoked(token, decoded_token):
-            return None
+    if check_blacklist and await _reset_token_revoked(token, decoded_token):
+        return None
 
     # Return the email stored in the token
     return str(decoded_token["sub"])
 
 
-def _reset_token_revoked(token: str, decoded_token: dict) -> bool:
+async def _reset_token_revoked(token: str, decoded_token: dict) -> bool:
     """Check reset-token revocation via jti or fallback user-level entries."""
     from swx_core.security.password_reset_registry import is_reset_token_revoked
 
     try:
-        return is_reset_token_revoked(token, decoded_token)
+        return await is_reset_token_revoked(token, decoded_token)
     except Exception:
         # Fail closed on registry outages: an unverifiable revocation state
         # must not grant a password change.

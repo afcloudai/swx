@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.1] - 2026-10-05
+
+### Fixed (P1 — boot-breaking)
+
+- **`email-validator` added to base dependencies** — pydantic `EmailStr` (used by
+  `swx_core/models/user.py` and user-facing route schemas) requires it at route-discovery
+  time on clean installs; 2.29.0 shipped without it and `create_swx_app()` crashed with
+  `ModuleNotFoundError` on clean projects.
+- **`check_database` / `check_database_pool` wrapped in `sqlalchemy.text(...)`** — both
+  executed bare `"SELECT 1"`, which SQLAlchemy 2.0 always rejects, so the framework's own
+  `/api/utils/health` reported `database: unhealthy` and `/utils/ready` 503'd on every
+  healthy SQLAlchemy 2.x install.
+- **`check_redis` reads `settings.redis_url` at call time** — previously defaulted to
+  `redis://localhost:6379` and was registered with no args, so containerized stacks
+  reported Redis failure while a healthy configured Redis was being ignored. Explicit
+  URL arguments still take precedence.
+
+### Fixed (P2/P3 — security hygiene & boot order)
+
+- **SECRET_KEY family required outside development** — `SECRET_KEY`,
+  `REFRESH_SECRET_KEY`, `PASSWORD_RESET_SECRET_KEY` silently self-generated per-process
+  random keys in production: all JWTs invalidated on restart, different keys per worker,
+  misconfiguration hidden. Settings load now **fails** when any of the three is unset in
+  `ENVIRONMENT=staging/production`; `local`/`dev`/`test` environments keep the
+  convenience fallback. (Implementation note: the fields are `Optional[str]` with a
+  fail-closed `model_validator`; `model_post_init` fills dev fallbacks — pydantic 2.13
+  re-runs post-init, so marker-in-default designs are defeated by the revalidation
+  ordering.)
+- **Startup audit-integrity check no longer crash-loops on fresh databases** — with
+  `DOCKERIZED=true`, `setup_database()` is skipped (prestart owns migrations) but the
+  integrity check queried `swx_audit_log` unconditionally, killing worker startup on any
+  fresh DB and — via `restart: unless-stopped` — SIGKILLing in-flight alembic runs
+  mid-DDL. The check now probes table existence: bounded 120s wait in Docker
+  (migrations run concurrently), graceful skip when the table is genuinely absent, and
+  tampering still fails hard (`RuntimeError`).
+- **Unknown `.env` keys now warn** — `extra="ignore"` made env typos silent (a
+  `SECRETT_KEY` typo booted with a default-derived secret). `Settings.model_post_init`
+  diffs `.env` keys against declared fields and emits a `UserWarning` listing unknown
+  keys; the check is scoped to `.env` (the user-owned surface) since `os.environ` is
+  full of unrelated system vars, and uses the explicit
+  `model_config["env_file"]` path (bare `dotenv_values()` frame-walks and resolves a
+  different file). `extra="warn"` was not used because pydantic-core rejects it at
+  schema-build time on current versions.
+
+### Fixed (P4 — DX)
+
+- **`load_all_models()` no longer pollutes `swx_core.models`** — it attached every
+  public attribute from every model submodule (SQLAlchemy internals: `func`, column
+  types, `datetime`), risking name collisions between submodules; it now attaches only
+  `SQLModel` subclasses. Boot logging demoted to `logger.debug` on the framework logger
+  (previously ~1000 `DEBUG: Attached ...` lines bypassed the JSON formatter to stdout).
+- **Template alembic chain hardened** — `template/project/migrations/env.py` now sets a
+  `NAMING_CONVENTION` (deterministic constraint/index names for safe downgrade
+  resolution) and an `include_object` filter restricted to managed prefixes
+  (`swx_`/`alembic_`); against `postgis/postgis` databases, unfiltered autogenerate
+  previously emitted `drop_table('zcta5')` for PostGIS/Tiger/Topology system tables and
+  failed with `DependentObjectsStillExistError`. Default revision `file_template` added
+  to `alembic.ini`.
+
+### Known Pre-existing Issues (unfixed, documented)
+
+- `tests/services/test_api_key_scoping.py::test_rotate_api_key_emits_rotated` and
+  `tests/core/test_middleware_stack.py::test_apply_functions_exist` fail at baseline
+  (missing `deactivate_and_extend_key` AsyncMock; `correlation_id` middleware spec
+  lacks a test-side apply-fn entry).
+- `swx_app/models/` contains intentionally-broken loader fixtures (`123_invalid.py`,
+  `product!.py`) tracked in git — they emit boot-time loader errors in developer
+  checkouts.
+
 ## [2.29.0] - 2026-10-04
 
 ### Security (Critical)

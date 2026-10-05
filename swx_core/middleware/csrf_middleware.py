@@ -35,7 +35,9 @@ class CSRFConfig:
     cookie_name: str = "csrf_token"
     header_name: str = "X-CSRF-Token"
     cookie_max_age: int = 86400
-    login_paths: list[str] = field(default_factory=lambda: ["/api/auth/login", "/api/auth/social/login"])
+    login_paths: list[str] = field(default_factory=lambda: [
+        "/api/auth/login", "/api/auth", "/api/auth/social/login",
+    ])
     logout_paths: list[str] = field(default_factory=lambda: ["/api/auth/logout"])
     refresh_paths: list[str] = field(default_factory=lambda: ["/api/auth/refresh"])
     exempt_paths: set[str] = field(default_factory=lambda: {"/docs", "/openapi.json", "/redoc", "/"})
@@ -83,6 +85,11 @@ class CSRFMiddleware:
         is_login = _matches_path(path, self.config.login_paths)
         is_logout = _matches_path(path, self.config.logout_paths)
         is_refresh = _matches_path(path, self.config.refresh_paths)
+        # Login paths mint the first CSRF cookie on their response but are NOT
+        # validation-gated: they are unauthenticated by definition (no session
+        # to forge yet), and gating them deadlocks first-time cookie-less
+        # clients — no server path can ever deliver the first token if the
+        # minting endpoint itself requires one.
         needs_cookie_set = is_login or is_refresh or _has_auth_cookie_no_csrf(combined_cookie, self.config)
 
         original_send = send
@@ -111,7 +118,7 @@ class CSRFMiddleware:
             await self.app(scope, receive, send_with_csrf)
             return
 
-        if _is_exempt(path, self.config):
+        if _is_exempt(path, self.config) or is_login:
             await self.app(scope, receive, send_with_csrf)
             return
 

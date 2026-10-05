@@ -223,8 +223,8 @@ class InfraSettingsMixin(BaseSettings):
         description="CSRF cookie maximum age in seconds",
     )
     CSRF_LOGIN_PATHS: list[str] = Field(
-        default=["/api/auth/login", "/api/auth/social/login"],
-        description="Paths that trigger CSRF cookie creation",
+        default=["/api/auth/login", "/api/auth", "/api/auth/social/login"],
+        description="Paths that trigger CSRF cookie creation (and bypass validation as pre-auth endpoints)",
     )
     CSRF_LOGOUT_PATHS: list[str] = Field(
         default=["/api/auth/logout"],

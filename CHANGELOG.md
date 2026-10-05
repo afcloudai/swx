@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.2] - 2026-10-05
+
+### Fixed
+
+- **TenantAwareRepository no longer silently converts a set tenant context into
+  `WHERE false`** (live-repro'd in V2-015) — when a model lacked the configured
+  `tenant_field`/`team_field` (e.g. the default `"tenant_id"` wiring against an
+  org-keyed table like `OrganizationMember`, which carries `organization_id`), the
+  repository discarded the set tenant context and every read returned zero rows
+  forever, with no error and no warning — "empty data" was actually
+  "misconfigured wiring". Two-layer fix:
+  - **Construction-time**: `TenantAwareRepository(...)` raises `ConfigurationError`
+    immediately when the model has neither `tenant_field` nor `team_field`,
+    with guidance to pass the model's actual column (e.g. `tenant_field="organization_id"`)
+    or use `BaseRepository` for tenant-free models.
+  - **Query-time backstop**: `_apply_tenant_filter` raises `ConfigurationError`
+    when context is **set but unbindable** (e.g. team-field-only model receiving
+    tenant-only context). The fail-closed semantic contract is now explicit:
+    "empty result" means "no tenant context" — never "misconfigured wiring".
+  Consumers bypassing the failure via their own base classes (LocaNG's
+  `LNGTenantAwareRepository` pins `tenant_field="organization_id") are unaffected;
+  the construction check passes for them.
+
 ## [2.29.1] - 2026-10-05
 
 ### Fixed (P1 — boot-breaking)

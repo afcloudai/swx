@@ -204,9 +204,10 @@ class UserNewPassword(SQLModel):
     Schema for setting a new password.
 
     Attributes:
-        token (Optional[str]): Reset token.
+        token (Optional[str]): Reset token (JWT, ~300 chars — not a compact
+            opaque token, hence the generous ceiling).
         new_password (Optional[str]): New password (8-40 characters).
     """
 
-    token: Optional[str] = Field(default=None, max_length=255)
+    token: Optional[str] = Field(default=None, max_length=512)
     new_password: Optional[str] = Field(default=None, min_length=8, max_length=40)

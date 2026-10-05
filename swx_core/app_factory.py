@@ -358,10 +358,35 @@ def _build_lifespan(
             logger.info("Initial data seeded.")
 
         # --- Audit integrity (SOC 2 CC7.2) ---
+        # Ordered strictly AFTER setup_database() in the non-Docker path; in
+        # Docker (prestart owns migrations) a still-migrating fresh DB shows
+        # up as a missing table: wait bounded for it rather than crash-looping
+        # (a restart loop can SIGKILL the alembic run mid-DDL).
         from swx_core.database.db import async_session
-        from swx_core.services.compliance.audit_integrity_service import check_startup_integrity
+        from swx_core.services.compliance.audit_integrity_service import (
+            check_startup_integrity,
+            audit_table_exists,
+        )
+
+        if settings.DOCKERIZED:
+            from asyncio import sleep as _sleep
+
+            _wait_seconds = 120
+            for _attempt in range(_wait_seconds // 5):
+                async with async_session() as probe_session:
+                    if await audit_table_exists(probe_session):
+                        break
+                logger.info("Audit table not present yet (migrations running); retrying in 5s (%d/%d)",
+                            _attempt + 1, _wait_seconds // 5)
+                await _sleep(5)
+            else:
+                logger.warning("Audit table still absent after %ss — skipping startup integrity check.", _wait_seconds)
+
         async with async_session() as integrity_session:
-            await check_startup_integrity(integrity_session)
+            try:
+                await check_startup_integrity(integrity_session)
+            except LookupError:
+                logger.warning("Audit table absent — startup integrity check skipped (fresh database).")
         logger.info("Audit log integrity verified.")
 
         # --- System policies ---

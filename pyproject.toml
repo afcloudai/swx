@@ -1,6 +1,6 @@
 [project]
 name = "swx-core"
-version = "2.29.0"
+version = "2.29.1"
 description = "Production-ready FastAPI framework with RBAC, OAuth, JWT, billing, modular architecture, and base class patterns. Create projects with 'swx new', scaffold with 'swx make:resource --base'."
 readme = "README.md"
 license = {text = "MIT"}
@@ -22,6 +22,7 @@ classifiers = [
 keywords = ["fastapi", "framework", "api", "rest", "async", "rbac", "jwt", "oauth"]
 
 dependencies = [
+    "email-validator>=2.0.0,<3.0.0",
     "fastapi>=0.109.0,<1.0.0",
     "uvicorn[standard]>=0.23.0,<1.0.0",
     "sqlalchemy[asyncio]>=2.0,<3.0",

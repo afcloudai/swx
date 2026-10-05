@@ -8,6 +8,7 @@ import asyncio
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from swx_core.utils.time import utc_now
 
 from swx_core.database.db import get_session
@@ -178,7 +179,7 @@ async def check_database() -> HealthStatus:
         session_gen = get_session()
         session = await session_gen.__anext__()
         try:
-            await session.execute("SELECT 1")
+            await session.execute(text("SELECT 1"))
         finally:
             await session_gen.aclose()
 
@@ -226,7 +227,7 @@ async def check_database_pool() -> HealthStatus:
         session_gen = get_session()
         session = await session_gen.__anext__()
         try:
-            await session.execute("SELECT 1")
+            await session.execute(text("SELECT 1"))
         finally:
             await session_gen.aclose()
     except Exception as exc:
@@ -272,11 +273,22 @@ async def check_database_pool() -> HealthStatus:
         latency_ms=latency_ms,
     )
 
-async def check_redis(redis_url: str = "redis://localhost:6379") -> HealthStatus:
-    """Check Redis connectivity."""
+async def check_redis(redis_url: str | None = None) -> HealthStatus:
+    """Check Redis connectivity.
+
+    Args:
+        redis_url: Explicit URL override. Defaults to the environment-backed
+            ``settings.REDIS_URL`` at call time — not localhost — so
+            containerized deployments resolve the configured Redis, not
+            a hardcoded dev default.
+    """
     try:
         import redis.asyncio as redis
-        
+
+        if redis_url is None:
+            from swx_core.config.settings import settings
+            redis_url = settings.redis_url
+
         client = redis.from_url(redis_url)
         start_time = utc_now()
         

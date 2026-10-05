@@ -17,6 +17,7 @@ from swx_core.repositories.base import BaseRepository
 from swx_core.database.db import AsyncSessionLocal
 from swx_core.models.base import Base
 from swx_core.core.tenant import get_current_tenant_id, is_super_admin, get_current_team_id
+from swx_core.utils.errors import ConfigurationError
 
 ModelType = TypeVar("ModelType", bound=Base)
 
@@ -36,6 +37,17 @@ class TenantAwareRepository(BaseRepository[ModelType]):
         self._external_session = session
         self._explicit_tenant_id = explicit_tenant_id
         self._explicit_team_id = explicit_team_id
+
+        if not (hasattr(model, tenant_field) or hasattr(model, team_field)):
+            # Fail at wiring time: without a bindable field, a set tenant
+            # context silently degrades every read to WHERE false (zero rows,
+            # no error) — a misconfiguration that must not look like empty data.
+            raise ConfigurationError(
+                f"{model.__name__} has neither a {tenant_field!r} nor a {team_field!r} "
+                f"column; TenantAwareRepository cannot bind tenant context. "
+                f"Pass tenant_field=<the model's org/tenant column> (e.g. "
+                f"'organization_id') or use BaseRepository for tenant-free models."
+            )
     
     def _get_session(self):
         if self._external_session:
@@ -55,20 +67,31 @@ class TenantAwareRepository(BaseRepository[ModelType]):
     def _apply_tenant_filter(self, query, use_team: bool = False):
         if is_super_admin() and not self._explicit_tenant_id:
             return query
-        
+
         tenant_id = self._get_tenant_id()
         team_id = self._get_team_id()
-        
+
         if use_team and team_id and hasattr(self.model, self.team_field):
             return query.where(getattr(self.model, self.team_field) == team_id)
-        
+
         if tenant_id and hasattr(self.model, self.tenant_field):
             return query.where(getattr(self.model, self.tenant_field) == tenant_id)
-        
+
         if team_id and hasattr(self.model, self.team_field):
             return query.where(getattr(self.model, self.team_field) == team_id)
-        
-        # No tenant context available — return no results instead of all results
+
+        if tenant_id or team_id:
+            # Context is set but this model has no matching column — raising
+            # keeps "empty result" meaning "no context", never "misconfigured
+            # wiring" (a silent WHERE false here hides the setup error forever).
+            raise ConfigurationError(
+                f"Tenant context set ({tenant_id=}, {team_id=}) but {self.model.__name__} "
+                f"has no {self.tenant_field!r}/{self.team_field!r} column — cannot bind "
+                f"isolation filter. Fix the repository wiring (tenant_field=...) or "
+                f"unset the tenant context for this request."
+            )
+
+        # No tenant context: filter to no results rather than all results.
         return query.where(sa_false())
     
     def _inject_tenant_data(self, data: Dict[str, Any]) -> Dict[str, Any]:

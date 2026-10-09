@@ -56,18 +56,25 @@ class RateLimitResult:
         self.retry_after = retry_after
 
 
-def _normalise_window(window: Union[LimitWindow, int]) -> tuple[LimitWindow, int]:
+def _normalise_window(window: Union[LimitWindow, int, str]) -> tuple[LimitWindow, int]:
     """Convert a window value to (LimitWindow, seconds).
 
-    Accepts either a :class:`LimitWindow` enum member or a raw integer
-    (60, 3600, 86400).  Returns the matching enum and its duration in
-    seconds.
+    Accepts a :class:`LimitWindow` enum member, any string-valued enum of the
+    same shape, or the raw strings ``"1m"/"1h"/"24h"``, or raw integers
+    (60, 3600, 86400). String-shaped inputs are normalised by **value**, not
+    class identity: the dynamic module loader reloads this module at boot,
+    which rebinds LimitWindow to a fresh class while import-time bindings
+    elsewhere keep the stale one — a class-identity ``isinstance`` would then
+    raise for every request and break enforcement.
 
     Raises:
-        ValueError: If *window* is an unrecognised integer.
+        ValueError: If *window* is an unrecognised string or integer.
     """
     if isinstance(window, LimitWindow):
         return window, _WINDOW_SECONDS[window]
+
+    if isinstance(window, bool):
+        raise TypeError("window must be LimitWindow, int, or str")
 
     if isinstance(window, int):
         enum_val = _INT_TO_WINDOW.get(window)
@@ -79,8 +86,18 @@ def _normalise_window(window: Union[LimitWindow, int]) -> tuple[LimitWindow, int
             f"or a LimitWindow enum member."
         )
 
+    if isinstance(window, str):
+        try:
+            member = LimitWindow(window)
+        except ValueError as exc:
+            raise ValueError(
+                f"Unsupported rate-limit window string: {window!r}. "
+                f"Expected one of {[m.value for m in LimitWindow]}."
+            ) from exc
+        return member, _WINDOW_SECONDS[member]
+
     raise TypeError(
-        f"window must be LimitWindow or int, got {type(window).__name__}"
+        f"window must be LimitWindow, int, or str, got {type(window).__name__}"
     )
 
 

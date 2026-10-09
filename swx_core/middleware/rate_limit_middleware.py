@@ -41,8 +41,20 @@ def _extract_header(headers: list[tuple[bytes, bytes]], name: bytes) -> str | No
 
 
 def _path_matches(path: str, prefixes: list[str]) -> bool:
-    """Check whether *path* starts with any of the given *prefixes*."""
-    return any(path.startswith(prefix) for prefix in prefixes)
+    """Check whether *path* equals a skip entry or lives beneath it.
+
+    Prefix match is directory-scoped: ``/docs`` skips ``/docs`` and
+    ``/docs/x``, not ``/docsanything``; the root entry ``/`` matches only
+    the exact root path (any path startswith ``/``, so a raw prefix check
+    on ``/`` would exempt every URL and silently disable the limiter).
+    """
+    for prefix in prefixes:
+        if path == prefix:
+            return True
+        base = prefix.rstrip("/")
+        if base and path.startswith(base + "/"):
+            return True
+    return False
 
 
 def _fnmatch_any(path: str, patterns: list[str]) -> bool:

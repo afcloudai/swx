@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.4] - 2026-10-09
+
+### Fixed (ledger #15–#16 — rate limiting enforcement)
+
+- **Rate-limit middleware no longer globally exempted by the `"/"` skip entry (#15)** —
+  `_DEFAULT_SKIP_PATHS` contains `"/"` and matching used raw `startswith`, which every
+  absolute path satisfies: with default settings the limiter bypassed **every URL**.
+  `_path_matches` is now exact-or-directory-scoped (`/docs` still skips `/docs` and
+  `/docs/x`, no longer `/docsanything`; `"/"` matches only the exact root path). The
+  same tightening kills the silent `/api/utils/healthcheck`-style prefix over-match.
+- **Redis-backed rate limiting survives the boot-time module reload (#16)** —
+  `load_all_modules()` reloads every scanned module (loader.py reload branch), re-binding
+  `LimitWindow` to a fresh class while package-import-time bindings (middleware,
+  `swx_core.services.rate_limit.__init__`) keep the stale one. `_normalise_window`'s
+  class-identity `isinstance` then raised `TypeError` for every request; the limiter's
+  except-path turned that into `_fail_result` — fail-closed (deny all) by default,
+  fail-open (allow all) when configured, either way enforcement broken. Window
+  normalisation is now **value-based** (str-Enum members of any class identity and raw
+  `"1m"/"1h"/"24h"` strings all normalise; ints unchanged; garbage raises the documented
+  errors). Verified with a live `importlib.reload` + stale-member end-to-end check
+  (pre-fix: TypeError → fail result; post-fix: normal result).
+
 ## [2.29.3] - 2026-10-05
 
 ### Fixed (ledger #11–#13 — live-verified on 2.29.2)

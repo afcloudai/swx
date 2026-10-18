@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.5] - 2026-10-09
+
+### Fixed (locang-postcode-gateway `known-swx-core-issues.md` ISSUE-1/ISSUE-2)
+
+- **`swx db setup` / `swx db seed` use module invocation (`#ISSUE-1`)** — the CLI
+  subprocess-called CWD-relative script paths (`python swx_core/database/db_setup.py`)
+  that do not exist when `swx_core` is installed into site-packages (uv/pip), failing
+  with a generic "Database setup failed!". Both commands now run
+  `[sys.executable, "-m", "swx_core.database.db_setup" | "swx_core.database.db_seed"]` —
+  both modules carry main-guards, and `sys.executable` replaces the bare `"python"`
+  (pinned interpreter instead of whatever `PATH` resolves).
+- **`bcrypt>=4.0.1,<4.1.0` (`#ISSUE-2`)** — the previous `<4.4.0` range admitted
+  bcrypt 4.1–4.3, which removed `bcrypt.__about__` that passlib 1.7.4 probes at
+  backend load, crashing the superuser seed. The framework now pins the band all
+  sibling SWX applications pin (`bcrypt==4.0.1`), as a range. Release the bound only
+  when passlib ships a compatible probe. Verified live: `CryptContext` hash/verify
+  roundtrip on 4.0.1.
+
 ## [2.29.4] - 2026-10-09
 
 ### Fixed (ledger #15–#16 — rate limiting enforcement)

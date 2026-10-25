@@ -30,8 +30,8 @@ class VersionInfo(NamedTuple):
 
 # Version components
 VERSION_MAJOR = 2
-VERSION_MINOR = 29
-VERSION_PATCH = 5
+VERSION_MINOR = 30
+VERSION_PATCH = 0
 VERSION_RELEASE = "final"  # alpha, beta, candidate, final
 VERSION_SERIAL = 0
 

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.30.0] - 2026-10-24
+
+### Added (SWX-IDM-001 — OIDC identity provider · AFCloud identity SSOT, ADR-017)
+
+- **OIDC provider module `swx_core/auth/oidc_provider/`** — first-class IdP:
+  `/oidc/authorize` (PKCE **S256 mandatory** for public clients, exact redirect
+  matching, consent recording for trusted first-party clients), `/oidc/token`
+  (authorization-code single-use with atomic consume + replay refusal,
+  **refresh rotation with reuse detection → family revocation**,
+  `client_credentials` for confidential first-party clients), `/oidc/revoke`
+  (RFC 7009, silent on unknown tokens), `/oidc/userinfo` (audience-bound,
+  scope-gated claims; **no email claims**), discovery + `/jwks.json`.
+- **Signing keys** — RS256 (default) / EdDSA with `kid` headers; private keys
+  encrypted at rest via the EncryptionService (`swx idp rotate-keys` with
+  verify-only overlap window + sweep-demote single-active invariant; JWKS keeps
+  publishing retired keys so old tokens verify until retirement).
+- **Admin client CRUD** `/admin/oidc/clients` — guarded `AdminUserDep` + strict
+  `idp:clients:read|write|manage` enforced over the **new `swx_admin_user_roles`
+  binding** (admin identities can now hold RBAC roles; `FIRST_SUPERUSER` root
+  carve-out); permission seeds in `scripts/seed_system.py`; grant bindings via
+  `swx idp bind-admin`.
+- **Phone-first verification** — `swx_users.phone` + `phone_verified_at`;
+  pluggable `PhoneVerificationChannel` (`SWX_PHONE_VERIFICATION_CHANNEL`;
+  default logs); OTP reuses the email-OTP machinery keyed `phone:<user_id>`;
+  user endpoints `POST /user/phone-verification/{request,confirm}`.
+- **Identity linking (D-7)** — `link_external_identity()` /
+  `resolve_user_by_idp_sub()` over `swx_social_accounts`, requires the IdP's
+  verified-phone claim; unique `(provider, provider_id)` index guarantees one
+  external subject ↔ one user.
+- **Additive audience extension (D-5)** — `create_token`/`decode_token` accept
+  plain-string audiences (`oidc_client:<id>`); OIDC and platform tokens are
+  mutually non-consumable; HS256 platform flows unchanged.
+- **CLI `swx idp`** — `rotate-keys [--dry-run]`, `keys list`, `seed --demo`,
+  `bind-admin`.
+- **Migrations** — standalone templates `v2_30_0` (OIDC tables), `v2_30_1`
+  (social-account identity uniqueness, fail-closed on duplicates), `v2_30_2`
+  (admin user-roles), `v2_30_3` (user phone verification) + chained equivalents
+  in the project scaffold.
+- **Conformance battery** — `tests/auth/oidc/` + `tests/cli/test_idp_commands.py`:
+  authorize/token/userinfo/revoke matrices (PKCE downgrade, redirect tampering,
+  code replay, refresh reuse → family revocation, client impersonation, TTL
+  boundaries), key rotation + JWKS, audience back-compat, phone verification,
+  identity linking (#SWX-IDM-001).
+- **Audit events** — `auth.oidc_authorize_denied`, `auth.oidc_token_denied`,
+  `auth.consent_granted/revoked`, `auth.token_issued/revoked/family_revoked`,
+  `auth.oauth_client_*`, `auth.oauth_key_rotated`, `auth.phone_verification_*`,
+  `auth.identity_linked` (hash-chained + SIEM enqueue automatic).
+- **Docs** — `docs/04-core-concepts/IDENTITY_PROVIDER.md`.
+
 ## [2.29.5] - 2026-10-09
 
 ### Fixed (locang-postcode-gateway `known-swx-core-issues.md` ISSUE-1/ISSUE-2)

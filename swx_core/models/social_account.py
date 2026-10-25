@@ -2,8 +2,9 @@
 
 import uuid
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import Column, DateTime, ForeignKey, String
+from sqlalchemy import Column, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 from sqlmodel import Field, SQLModel
@@ -21,8 +22,14 @@ class SocialAccountBase(Base):
 
 
 class SocialAccount(SocialAccountBase, table=True):
-    __tablename__ = "swx_social_accounts"  # pyright: ignore[reportAssignmentType]
-    __table_args__ = {"extend_existing": True}
+    __tablename__ = cast(Any, "swx_social_accounts")  # pyright: ignore[reportAssignmentType]
+    __table_args__ = cast(
+        Any,
+        (
+            UniqueConstraint("provider", "provider_id", name="uq_social_account_provider_identity"),
+            {"extend_existing": True},
+        ),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(

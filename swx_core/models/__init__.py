@@ -228,6 +228,11 @@ from swx_core.auth.oidc_provider.models import (
     OIDCSigningKeyCreate,
     OIDCSigningKeyPublic,
 )
+from swx_core.models.admin_user_role import (
+    AdminUserRole,
+    AdminUserRoleCreate,
+    AdminUserRolePublic,
+)
 
 __all__ = [
     # Base
@@ -423,4 +428,8 @@ __all__ = [
     "OIDCSigningKey",
     "OIDCSigningKeyCreate",
     "OIDCSigningKeyPublic",
+    # Admin user-role bindings (RBAC for admin identities)
+    "AdminUserRole",
+    "AdminUserRoleCreate",
+    "AdminUserRolePublic",
 ]

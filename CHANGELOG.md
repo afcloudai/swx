@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.31.0] - 2026-10-25
+
+### Added (SWX-IDM-001 v2.31 — OIDC full-conformance + identity gate + D-9 recovery)
+
+- **`end_session_endpoint`** (`GET /oidc/logout`, RP-initiated logout) — hint-validated subject revocation:
+  platform refresh tokens/sessions + ALL OIDC refresh families; `post_logout_redirect_uris` registered
+  per-client (exact-match; never redirects attacker URLs); discovery advertises `end_session_endpoint`.
+- **Introspection** (`POST /oidc/introspect`, RFC 7662) — confidential-clients-only; blacklist/expiry-aware;
+  cross-client → `active:false` (audited); refresh + access support.
+- **`offline_access` scoping (OIDC Core)** — refresh tokens mint only when the scope was requested;
+  `client_credentials` excludes `openid`/`offline_access`; discovery advertises the scope.
+- **Authorize params**: `prompt=none` → fail-closed `login_required`/`interaction_required` (+ cannot combine
+  with `login`/`consent`), `prompt=login` forces re-auth, `max_age` re-authenticates stale sessions,
+  `response_mode=query|fragment` (code in fragment supported).
+- **Identity verification gate (dual-OTP)** — `SWX_IDENTITY_REQUIRED_VERIFICATIONS=none|phone|email|both`;
+  `both` = bank-grade: `POST /user/identity-verification/request` sends OTP to BOTH channels (email OTP via
+  `EmailOtpChannel` + phone via the WhatsApp-estate channel), authorize refuses to issue until both confirm
+  (fail-closed `interaction_required`, audited).
+- **Phone-OTP account recovery (D-9)** — `POST /auth/recovery/{request,confirm}`: recovery OTP only for
+  VERIFIED phones (email-path unchanged); confirm resets the password AND revokes every active credential
+  (platform + OIDC families); enumera-safe by construction (#SWX-IDM-001 D-9).
+- **Consent surface** — `GET /user/oidc-consents` + `DELETE /user/oidc-consents/{client_id}` (revocation
+  shrinks the next authorize; audited).
+- **Federated provisioning fallback** — consumer callback resolves by IdP `sub` first; phone-verified
+  claims provision email-less identities via `provision_federated_identity` (Stage-1: linked login works for
+  email-bearing personas; true phone-only sessions tracked D-10).
+- **Email relaxed to optional** — `swx_users.email` nullable (migration v2_31_1 + template chains), model
+  schemas optional; "add nothing that makes email required" honored at the schema level (D-1).
+- **Audit events** — `auth.identity_verification_requested/confirmed`, `auth.phone_recovery_requested/completed`.
+
 ## [2.30.0] - 2026-10-24
 
 ### Added (SWX-IDM-001 — OIDC identity provider · AFCloud identity SSOT, ADR-017)

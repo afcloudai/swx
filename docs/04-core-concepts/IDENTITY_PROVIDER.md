@@ -1,7 +1,7 @@
 # Identity Provider (OIDC)
 
-**Version:** 1.0.0
-**Last Updated:** 2026-10-24
+**Version:** 1.1.0
+**Last Updated:** 2026-10-25
 
 ---
 
@@ -54,6 +54,8 @@ never required or exposed through IdP claims).
 | `SWX_OIDC_KEY_RETIREMENT_DAYS` | `30` | Days a demoted key stays verify-only |
 | `SWX_OIDC_DEFAULT_SIGNING_ALGORITHM` | `RS256` | `RS256` or `EdDSA` |
 | `SWX_PHONE_VERIFICATION_CHANNEL` | *(none)* | Registered `PhoneVerificationChannel` name; default logs the code |
+| `SWX_EMAIL_OTP_CHANNEL` | *(none)* | Registered `EmailOtpChannel` name for the email-OTP leg; the estate plugs SMTP/SendGrid at bootstrap |
+| `SWX_IDENTITY_REQUIRED_VERIFICATIONS` | `none` | Identity gate: `none\|phone\|email\|both` — `both` sends OTP to BOTH channels (dual delivery) and issues only when both confirm |
 
 The private keys, client secrets and encrypted fields ride the standard `SWX_ENCRYPTION_KEY` /
 `SWX_ENCRYPTION_KEY_PREVIOUS` EncryptionService configuration.
@@ -99,6 +101,8 @@ All issuer routes are excluded from the OpenAPI schema; discovery document adver
 | `GET` | `/oidc/authorize` | browser session / login redirect | Validate + store pending grant in session → login → issue code redirect |
 | `POST` | `/oidc/token` | `client_secret_basic` / `client_secret_post` (public: secretless) | `authorization_code`, `refresh_token`, `client_credentials` |
 | `POST` | `/oidc/revoke` | client authentication | RFC 7009 (200 even for unknown tokens — never leaks validity) |
+| `POST` | `/oidc/introspect` | client authn (confidential only) | RFC 7662 introspection — `active` + claims; cross-client/blacklisted → `active:false` |
+| `GET` | `/oidc/logout` | `id_token_hint` (optional) | `end_session_endpoint`: revokes ALL credentials of the subject + redirects only to exactly-registered `post_logout_redirect_uris` |
 | `GET` | `/oidc/userinfo` | Bearer (header only) | Scope-gated claims |
 | `GET` | `/.well-known/openid-configuration` | public | OIDC Discovery 1.0 metadata |
 | `GET` | `/jwks.json` | public | RFC 7517 JWKS (active + verify-only keys) |
@@ -108,7 +112,11 @@ All issuer routes are excluded from the OpenAPI schema; discovery document adver
 **Authorize → token (PKCE):**
 
 1. `GET /oidc/authorize` validates client (enabled, grant allowed), redirect (exact membership), scope
-   (subset), PKCE (`S256` only — `plain` refused) and requires `nonce` when `openid` is requested.
+   (subset), and PKCE — **mandatory for ALL clients (OAuth 2.1)**, `S256` only, `plain` refused. `nonce` is
+   optional and honored when present; `prompt=none` errors fail-closed (`login_required`/`interaction_required`),
+   `prompt=login` forces re-auth, `max_age` re-authenticates stale sessions, `response_mode` supports
+   `query` (default) and `fragment` (code lands in the fragment), and the **identity verification gate**
+   (`SWX_IDENTITY_REQUIRED_VERIFICATIONS`) issues only once the required channels verify.
 2. Unauthenticated users get a 303 to `SWX_OIDC_LOGIN_URL?next=<authorize url>` with the pending grant in
    the Starlette session; the user-domain session/cookie machinery performs authentication.
 3. Post-authentication the code is issued (hash-stored, 60 s, single use), a consent row is recorded
@@ -116,7 +124,7 @@ All issuer routes are excluded from the OpenAPI schema; discovery document adver
    `code` + `state`.
 4. `POST /oidc/token` (`grant_type=authorization_code`) re-verifies the client, redirects (exact), consumes
    the code **atomically** (replay ⇒ `invalid_grant` + audit), verifies PKCE, then mints
-   access + `id_token` + a refresh token (new family).
+   access + `id_token` — and a refresh token (new family) **only when `offline_access` was requested**.
 
 **Refresh rotation:** `refresh_token` grant verifies hash + expiry + `active` status; presents a reused
 rotated/revoked token ⇒ **entire family revoked** + `auth.token_family_revoked` audit. Rotation is atomic
@@ -184,6 +192,53 @@ account = await link_external_identity(session, user, idp_sub, idp="afcloud", ph
 ```
 
 Refusals (fail-closed): linking without `phone_verified=true`; subject already linked to a different user.
+
+## Logout (end_session)
+
+```http
+GET /oidc/logout?id_token_hint=<id_token>&post_logout_redirect_uri=https%3A%2F%2Fapp%2Flogout&state=…
+```
+
+Validates the hint against our keys, revokes the subject's platform refresh tokens + sessions AND every OIDC
+refresh family, clears the platform session, then redirects **only** to a exactly-registered
+`post_logout_redirect_uri` (or answers 200 `{"status": "logged_out"}`). Discovery advertises
+`end_session_endpoint`.
+
+## Introspection (RFC 7662)
+
+```http
+POST /oidc/introspect   token=<access|refresh>   (Basic client authn, confidential clients only)
+→ {"active": true, "scope", "client_id", "sub", "exp", "iat", "jti"} | {"active": false}
+```
+
+Cross-client tokens, blacklisted JTIs, expired and non-active refreshes all answer `active:false` — no
+validity leak; attempts are audited.
+
+## Identity Verification Gate (dual-OTP)
+
+```
+POST /user/identity-verification/request   → sends OTP to EVERY required channel (both: email + phone/WhatsApp)
+POST /user/identity-verification/confirm   {"channel": "email"|"phone", "code"}
+```
+
+`SWX_IDENTITY_REQUIRED_VERIFICATIONS=both` = bank-grade onboarding: the account is issue-capable only after
+BOTH channels confirm. The gate lives in `_issue_code_and_redirect` (covers authorize + completion resume).
+
+## Account Recovery (D-9)
+
+```
+POST /auth/recovery/request   {"phone"}   → recovery OTP (only for VERIFIED phones; identical response otherwise — no enumeration)
+POST /auth/recovery/confirm   {"phone","code","new_password"} → password reset + EVERY active credential revoked
+                                              (platform refresh/sessions + all OIDC families)
+```
+
+Email recovery (JWT + email OTP) remains available for email identities. All recovery/revocation steps audited.
+
+## Email as an optional channel
+
+`swx_users.email` is **nullable from v2.31.1** (phone-first norm; unique index retained — Postgres allows
+multiple NULLs). OIDC never claims email; registered email users keep full email flows (verification,
+recovery). Platform sessions remain email-subject (phone-only login = subject migration, tracked D-10).
 
 ## CLI
 

@@ -7,12 +7,17 @@ Supports different token audiences for different domains:
 - "admin": Admin domain tokens
 - "user": User domain tokens
 - "system": System domain tokens
+- "mfa": MFA step-up challenge tokens
+
+Additive (SWX-IDM-001): ``audience`` also accepts a plain string (e.g.
+``oidc_client:<client_id>``), letting the OIDC provider extend the audience
+class without touching existing enum semantics.
 """
 
 import jwt
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from uuid import uuid4
 
 from swx_core.config.settings import settings
@@ -27,9 +32,16 @@ class TokenAudience(str, Enum):
     MFA = "mfa"
 
 
+Audience = Union[TokenAudience, str]
+
+
+def _audience_value(audience: Audience) -> str:
+    return audience.value if isinstance(audience, TokenAudience) else audience
+
+
 def create_token(
     subject: str,
-    audience: TokenAudience,
+    audience: Audience,
     expires_delta: timedelta,
     scopes: Optional[list[str]] = None,
     auth_provider: str = "local",
@@ -61,7 +73,7 @@ def create_token(
         "exp": expire.timestamp(),
         "iat": now.timestamp(),
         "sub": subject,
-        "aud": audience.value,
+        "aud": _audience_value(audience),
         "auth_provider": auth_provider,
         "jti": uuid4().hex,
     }
@@ -81,7 +93,7 @@ def create_token(
 
 def decode_token(
     token: str,
-    audience: TokenAudience,
+    audience: Audience,
     secret_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -89,7 +101,7 @@ def decode_token(
 
     Args:
         token: The JWT token to decode.
-        audience: Expected token audience.
+        audience: Expected token audience (enum member or plain string).
         secret_key: Optional secret key (defaults to settings.SECRET_KEY).
 
     Returns:
@@ -101,16 +113,17 @@ def decode_token(
     if secret_key is None:
         secret_key = settings.SECRET_KEY
 
+    expected_aud = _audience_value(audience)
     payload = jwt.decode(
         token,
         secret_key,
         algorithms=[settings.PASSWORD_SECURITY_ALGORITHM],
-        audience=audience.value,
+        audience=expected_aud,
     )
 
     # Validate audience matches
-    if payload.get("aud") != audience.value:
-        raise jwt.InvalidTokenError(f"Token audience mismatch: expected {audience.value}")
+    if payload.get("aud") != expected_aud:
+        raise jwt.InvalidTokenError(f"Token audience mismatch: expected {expected_aud}")
 
     return payload
 

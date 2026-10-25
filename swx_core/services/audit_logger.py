@@ -70,6 +70,10 @@ class AuditAction(str, Enum):
     AUTH_PHONE_VERIFICATION_REQUESTED = "auth.phone_verification_requested"
     AUTH_PHONE_VERIFICATION_CONFIRMED = "auth.phone_verification_confirmed"
     AUTH_IDENTITY_LINKED = "auth.identity_linked"
+    AUTH_IDENTITY_VERIFICATION_REQUESTED = "auth.identity_verification_requested"
+    AUTH_IDENTITY_VERIFICATION_CONFIRMED = "auth.identity_verification_confirmed"
+    AUTH_PHONE_RECOVERY_REQUESTED = "auth.phone_recovery_requested"
+    AUTH_PHONE_RECOVERY_COMPLETED = "auth.phone_recovery_completed"
 
     # RBAC events
     RBAC_ROLE_ASSIGNED = "rbac.role_assigned"

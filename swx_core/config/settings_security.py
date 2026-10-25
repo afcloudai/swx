@@ -149,3 +149,20 @@ class SecuritySettingsMixin(BaseSettings):
             "(register via register_phone_channel(); default logs the code — no transport configured)."
         ),
     )
+    SWX_EMAIL_OTP_CHANNEL: Optional[str] = Field(
+        default=None,
+        description=(
+            "Registered EmailOtpChannel name for email-verification/dual OTP delivery "
+            "(register via the identity_verification registry; default logs the code; "
+            "the estate plugs its SMTP/SendGrid channel at bootstrap)."
+        ),
+    )
+    SWX_IDENTITY_REQUIRED_VERIFICATIONS: Literal["none", "phone", "email", "both"] = Field(
+        default="none",
+        description=(
+            "Identity gate for the OIDC login flow: 'none' issues freely; 'phone'/'email' "
+            "require that channel to be verified (phone_verified_at / email_verified_at); "
+            "'both' sends OTP to BOTH channels (dual delivery) and requires both confirmed "
+            "before /oidc/authorize issues — gate is fail-closed (interaction_required)."
+        ),
+    )

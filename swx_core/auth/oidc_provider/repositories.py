@@ -30,6 +30,7 @@ from swx_core.auth.oidc_provider.models import (
     REFRESH_STATUS_REVOKED,
     REFRESH_STATUS_ROTATED,
 )
+from swx_core.models.user import User
 from swx_core.utils.time import utc_now
 
 
@@ -113,6 +114,12 @@ async def delete_client_cascade(
     return counts
 
 
+async def find_user_by_verified_phone(session: AsyncSession, phone: str) -> User | None:
+    """The recovery/gate identity: only VERIFIED phones resolve to a user."""
+    stmt = select(User).where(User.phone == phone, User.phone_verified_at.isnot(None))
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 # ---------------------------------------------------------------------------
 # Grant codes (single-use authorization codes)
 # ---------------------------------------------------------------------------
@@ -170,6 +177,11 @@ async def upsert_consent(
     await session.commit()
     await session.refresh(consent)
     return consent
+
+
+async def list_consents_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[OIDCConsent]:
+    stmt = select(OIDCConsent).where(OIDCConsent.user_id == user_id).order_by(OIDCConsent.granted_at.desc())
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def revoke_consent(session: AsyncSession, user_id: uuid.UUID, client_id: str) -> OIDCConsent | None:
@@ -251,6 +263,17 @@ async def revoke_family(session: AsyncSession, family_id: uuid.UUID) -> int:
 async def revoke_refresh_token(session: AsyncSession, token: OIDCRefreshToken) -> int:
     """RFC 7009 refresh revocation — the whole family falls to be safe."""
     return await revoke_family(session, token.family_id)
+
+
+async def revoke_families_for_user(session: AsyncSession, user_id: uuid.UUID) -> int:
+    result = await session.execute(
+        update(OIDCRefreshToken)
+        .where(OIDCRefreshToken.user_id == user_id)
+        .where(OIDCRefreshToken.status != REFRESH_STATUS_REVOKED)
+        .values(status=REFRESH_STATUS_REVOKED)
+    )
+    await session.commit()
+    return result.rowcount or 0
 
 
 async def revoke_families_for_client(session: AsyncSession, client_id: str) -> int:

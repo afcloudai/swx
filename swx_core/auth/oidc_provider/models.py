@@ -50,6 +50,7 @@ class OIDCClientBase(Base):
     client_secret_hash: str | None = Field(default=None, max_length=255)  # bcrypt; None ⇒ public client
     logo_url: str | None = Field(default=None, max_length=1000)
     redirect_uris: list[str] = Field(sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")))
+    post_logout_redirect_uris: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")))
     grant_types: list[str] = Field(default_factory=_default_grant_types, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")))
     scopes: list[str] = Field(default_factory=_default_scopes, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")))
     is_first_party: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
@@ -77,6 +78,7 @@ class OIDCClientCreate(SQLModel):
     client_secret: str | None = Field(default=None, max_length=500)
     logo_url: str | None = Field(default=None, max_length=1000)
     redirect_uris: list[str] = Field(min_length=1)
+    post_logout_redirect_uris: list[str] | None = None
     grant_types: list[str] | None = None
     scopes: list[str] | None = None
     is_first_party: bool = True
@@ -94,6 +96,7 @@ class OIDCClientUpdate(SQLModel):
     client_secret: str | None = Field(default=None, max_length=500)
     logo_url: str | None = Field(default=None, max_length=1000)
     redirect_uris: list[str] | None = None
+    post_logout_redirect_uris: list[str] | None = None
     grant_types: list[str] | None = None
     scopes: list[str] | None = None
     is_first_party: bool | None = None

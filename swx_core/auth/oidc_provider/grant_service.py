@@ -59,7 +59,138 @@ def issuer_endpoint_urls(issuer: str) -> dict[str, str]:
         "token": f"{issuer}/oidc/token",
         "userinfo": f"{issuer}/oidc/userinfo",
         "revocation": f"{issuer}/oidc/revoke",
+        "introspection": f"{issuer}/oidc/introspect",
+        "end_session": f"{issuer}/oidc/logout",
         "jwks": f"{issuer}/jwks.json",
+    }
+
+
+async def end_session(session: Any, request: Request, params: dict[str, Any]) -> Any:
+    """RP-initiated logout (end_session_endpoint).
+
+    Revokes the subject's platform refresh tokens/sessions and EVERY OIDC
+    refresh family, clears the platform session, then redirects ONLY to an
+    exactly-registered ``post_logout_redirect_uri`` (never attacker URLs).
+    """
+    import uuid as _uuid
+
+    hint = params.get("id_token_hint")
+    post_logout_redirect_uri = params.get("post_logout_redirect_uri")
+    state = params.get("state") or None
+
+    client: Any = None
+    subject: _uuid.UUID | None = None
+    if hint:
+        try:
+            payload = await oidc_tokens.verify_oidc_access_token(session, str(hint))
+        except Exception:
+            await _audit(session, AuditAction.AUTH_LOGOUT, outcome=AuditOutcome.FAILURE,
+                         context={"path": "end_session", "reason": "invalid_id_token_hint"})
+            raise OIDCAuthzError("invalid_request", "Invalid id_token_hint", status_code=400) from None
+        audience = payload.get("aud")
+        if isinstance(audience, str):
+            client = await oidc_repo.get_client_by_public_id(session, audience)
+        subject_value = payload.get("sub")
+        try:
+            subject = _uuid.UUID(str(subject_value))
+        except ValueError:
+            raise OIDCAuthzError("invalid_request", "Invalid id_token_hint", status_code=400) from None
+
+    if post_logout_redirect_uri:
+        if client is None:
+            await _audit(session, AuditAction.AUTH_LOGOUT, outcome=AuditOutcome.FAILURE,
+                         context={"path": "end_session", "reason": "post_logout_without_client"})
+            raise OIDCAuthzError("invalid_request", "post_logout_redirect_uri requires a valid id_token_hint", status_code=400)
+        if post_logout_redirect_uri not in (client.post_logout_redirect_uris or []):
+            await _audit(session, AuditAction.AUTH_LOGOUT, outcome=AuditOutcome.FAILURE,
+                         context={"path": "end_session", "reason": "unregistered_post_logout_redirect"})
+            raise OIDCAuthzError("invalid_request", "post_logout_redirect_uri is not registered", status_code=400)
+
+    if subject is not None:
+        user = await session.get(User, subject)
+        if user is not None:
+            from swx_core.security.refresh_token_service import revoke_all_tokens
+
+            await revoke_all_tokens(session, str(user.email))
+        revoked = await oidc_repo.revoke_families_for_user(session, subject)
+        await _audit(
+            session,
+            AuditAction.AUTH_TOKEN_REVOKED,
+            context={"path": "end_session", "families_revoked": revoked},
+            actor_id=str(subject),
+            resource_id=str(subject),
+            resource_type="oidc_session",
+        )
+        await _audit(session, AuditAction.AUTH_LOGOUT, context={"path": "end_session"}, actor_id=str(subject))
+
+    request.session.pop(_PENDING_GRANT_KEY, None)
+    request.session.pop("swx_amr", None)
+
+    if post_logout_redirect_uri:
+        response = RedirectResponse(post_logout_redirect_uri, status_code=303)
+    else:
+        from fastapi.responses import JSONResponse
+
+        response = JSONResponse(status_code=200, content={"status": "logged_out"})
+    for cookie in (settings.COOKIE_ACCESS_TOKEN_NAME, settings.COOKIE_REFRESH_TOKEN_NAME):
+        response.delete_cookie(cookie)
+    return response
+
+
+async def introspect(session: Any, request: Request, form: dict[str, Any]) -> dict[str, Any]:
+    """RFC 7662 — token introspection for confidential clients (no validity leak)."""
+    client = await oidc_security.authenticate_client(session, request, form)
+    if client.client_secret_hash is None:
+        await _audit(session, AuditAction.AUTH_OIDC_TOKEN_DENIED, outcome=AuditOutcome.FAILURE,
+                     context={"path": "introspect", "reason": "public_client"})
+        raise OIDCAuthzError("invalid_client", "Introspection requires a confidential client", status_code=401)
+    token_value = str(form.get("token") or "")
+    if not token_value:
+        raise OIDCAuthzError("invalid_request", "token is required")
+
+    inactive: dict[str, Any] = {"active": False}
+    if "." in token_value:
+        payload: dict[str, Any] | None = None
+        try:
+            payload = await oidc_tokens.verify_oidc_access_token(session, token_value)
+        except Exception:
+            payload = None
+        if payload is None:
+            return inactive
+        expected_audience = f"oidc_client:{client.client_id}"
+        if payload.get("aud") != expected_audience:
+            await _audit(session, AuditAction.AUTH_OIDC_TOKEN_DENIED, outcome=AuditOutcome.FAILURE,
+                         context={"path": "introspect", "reason": "cross_client_token", "client_id": client.client_id},
+                         actor_id=client.client_id)
+            return inactive
+        exp = payload.get("exp")
+        now = utc_now().timestamp()
+        if exp and float(exp) <= now:
+            return inactive
+        jti = payload.get("jti")
+        blacklist = _get_token_blacklist()
+        if blacklist is not None and jti and await blacklist.is_revoked_by_jti(jti):
+            return inactive
+        return {
+            "active": True,
+            "scope": payload.get("scope", ""),
+            "client_id": client.client_id,
+            "sub": str(payload.get("sub")),
+            "exp": exp,
+            "iat": payload.get("iat"),
+            "jti": jti,
+        }
+
+    row = await oidc_repo.get_refresh_token_by_hash(session, oidc_tokens.sha256_hex(token_value))
+    if row is None or row.client_id != client.client_id:
+        return inactive
+    if row.status != REFRESH_STATUS_ACTIVE or row.expires_at <= utc_now():
+        return inactive
+    return {
+        "active": True,
+        "scope": row.scope,
+        "client_id": row.client_id,
+        "sub": str(row.user_id),
     }
 
 
@@ -158,7 +289,7 @@ async def authorize(session: Any, request: Request, params: dict[str, Any]) -> R
         )
         raise exc
 
-    state = params.get("state")
+    state = params.get("state") or None
     if response_type != "code":
         await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
                      context={"reason": "unsupported_response_type", "client_id": client.client_id})
@@ -171,23 +302,42 @@ async def authorize(session: Any, request: Request, params: dict[str, Any]) -> R
         await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
                      context={"reason": "scope_escalation", "client_id": client.client_id, "requested": scope_value})
         return _error_redirect(str(redirect_uri), "invalid_scope", "Requested scope exceeds the registered grant", state)
-
     code_challenge = params.get("code_challenge")
     challenge_method = params.get("code_challenge_method")
-    is_public = client.client_secret_hash is None
-    if is_public or code_challenge:
-        if not code_challenge or challenge_method != "S256":
+    if not code_challenge or challenge_method != "S256":
+        await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
+                     context={"reason": "pkce_missing_or_downgraded", "client_id": client.client_id})
+        return _error_redirect(str(redirect_uri), "invalid_request", "PKCE with S256 is required (OAuth 2.1)", state)
+    prompt_value = params.get("prompt") or ""
+    response_mode = params.get("response_mode")
+    max_age_raw = params.get("max_age")
+
+    prompt_actions = set(prompt_value.split())
+    if "none" in prompt_actions and prompt_actions & {"login", "consent", "select_account"}:
+        await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
+                     context={"reason": "prompt_none_combined", "client_id": client.client_id})
+        return _error_redirect(str(redirect_uri), "invalid_request", "prompt=none cannot be combined with other prompt values", state)
+    if prompt_actions - {"none", "login", "consent", "select_account"}:
+        await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
+                     context={"reason": "unsupported_prompt", "client_id": client.client_id, "prompt": prompt_value})
+        return _error_redirect(str(redirect_uri), "invalid_request", "unsupported prompt value(s)", state)
+    if response_mode and response_mode not in ("query", "fragment"):
+        await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
+                     context={"reason": "unsupported_response_mode", "client_id": client.client_id})
+        return _error_redirect(str(redirect_uri), "invalid_request", "response_mode must be query or fragment", state)
+    if max_age_raw is not None:
+        try:
+            max_age = int(max_age_raw)
+        except (TypeError, ValueError):
             await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
-                         context={"reason": "pkce_missing_or_downgraded", "client_id": client.client_id})
-            return _error_redirect(str(redirect_uri), "invalid_request", "PKCE with S256 is required for public clients", state)
-    if "openid" in requested_scopes and not params.get("nonce"):
-        await _audit(
-            session,
-            AuditAction.AUTH_OIDC_AUTHORIZE_DENIED,
-            outcome=AuditOutcome.FAILURE,
-            context={"reason": "nonce_missing", "client_id": client.client_id},
-        )
-        return _error_redirect(str(redirect_uri), "invalid_request", "nonce is required for the openid scope", state)
+                         context={"reason": "invalid_max_age", "client_id": client.client_id})
+            return _error_redirect(str(redirect_uri), "invalid_request", "max_age must be integer seconds", state)
+        if max_age < 0:
+            await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
+                         context={"reason": "invalid_max_age", "client_id": client.client_id})
+            return _error_redirect(str(redirect_uri), "invalid_request", "max_age must be non-negative", state)
+    else:
+        max_age = None
 
     pending: dict[str, Any] = {
         "client_id": client.client_id,
@@ -195,12 +345,31 @@ async def authorize(session: Any, request: Request, params: dict[str, Any]) -> R
         "scope": scope_value,
         "code_challenge": code_challenge,
         "code_challenge_method": challenge_method,
-        "nonce": params.get("nonce"),
+        "nonce": params.get("nonce") or None,
         "state": state,
+        "prompt_none": "none" in prompt_actions,
+        "force_login": "login" in prompt_actions,
+        "max_age": max_age,
+        "response_mode": response_mode or "query",
     }
 
-    user, user_payload = await _resolve_optional_user(session, request)
-    if user is None:
+    user: User | None = None
+    user_payload: dict[str, Any] | None = None
+    if not pending["force_login"]:
+        user, user_payload = await _resolve_optional_user(session, request)
+
+    if user is not None and user_payload:
+        iat = float(user_payload.get("iat", 0))
+        if pending["max_age"] is not None and (utc_now().timestamp() - iat) > pending["max_age"]:
+            pending["force_login"] = True
+            user, user_payload = None, None
+
+    if user is None or pending["force_login"]:
+        if pending["prompt_none"]:
+            required = "login_required" if user is None else "interaction_required"
+            await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
+                         context={"reason": f"prompt_none_{required}", "client_id": client.client_id})
+            return _error_redirect(str(redirect_uri), required, "prompt=none forbids interaction", state)
         request.session[_PENDING_GRANT_KEY] = pending
         login_url = settings.SWX_OIDC_LOGIN_URL
         next_url = quote(str(request.url), safe="")
@@ -229,6 +398,28 @@ async def _issue_code_and_redirect(session: Any, request: Request, user: User, p
         await _audit(session, AuditAction.AUTH_OIDC_AUTHORIZE_DENIED, outcome=AuditOutcome.FAILURE,
                      context={"reason": "client_disabled_mid_flow", "client_id": pending["client_id"]})
         raise OIDCAuthzError("invalid_request", "Client is no longer available")
+
+    # Identity verification gate (v2.31, SWX_IDENTITY_REQUIRED_VERIFICATIONS):
+    # fail-closed — the flow issues only once the required channels are verified.
+    from swx_core.auth.oidc_provider.identity_verification import gate_error_for_user
+
+    gate = gate_error_for_user(user)
+    if gate is not None:
+        error_code, description = gate
+        await _audit(
+            session,
+            AuditAction.AUTH_OIDC_AUTHORIZE_DENIED,
+            outcome=AuditOutcome.FAILURE,
+            context={"reason": "identity_verification_incomplete", "client_id": client.client_id, "detail": description},
+            actor_id=str(user.id),
+        )
+        if pending.get("prompt_none"):
+            raise OIDCAuthzError("interaction_required", description, status_code=400) from None
+        request.session[_PENDING_GRANT_KEY] = {**pending, "verification_required": True}
+        login_url = settings.SWX_OIDC_LOGIN_URL
+        next_url = quote(str(request.url), safe="")
+        separator = "&" if "?" in login_url else "?"
+        return RedirectResponse(f"{login_url}{separator}next={next_url}", status_code=303)
 
     auth_time_value = pending.get("auth_time")
     auth_time: datetime | None = (
@@ -267,6 +458,8 @@ async def _issue_code_and_redirect(session: Any, request: Request, user: User, p
     redirect_params: dict[str, str] = {"code": code}
     if pending.get("state") is not None:
         redirect_params["state"] = str(pending["state"])
+    if pending.get("response_mode") == "fragment":
+        return RedirectResponse(f"{pending['redirect_uri']}#{urlencode(redirect_params)}", status_code=303)
     return RedirectResponse(f"{pending['redirect_uri']}?{urlencode(redirect_params)}", status_code=303)
 
 
@@ -369,15 +562,25 @@ async def _authorization_code_grant(session: Any, request: Request, client: Any,
             access_token=access,
         )
 
-    refresh_value, _refresh_row = await oidc_tokens.mint_refresh_token(
-        session,
-        family_id=uuid.uuid4(),
-        client_id=client.client_id,
-        user_id=user.id,
-        scope=row.scope,
-        auth_time=row.auth_time,
-        expires_delta=timedelta(seconds=client.refresh_token_ttl_seconds),
-    )
+    response: dict[str, Any] = {
+        "access_token": access,
+        "token_type": oidc_tokens.TOKEN_TYPE_BEARER,
+        "expires_in": client.access_token_ttl_seconds,
+        "scope": row.scope,
+    }
+    if "offline_access" in row.scope.split():
+        refresh_value, _refresh_row = await oidc_tokens.mint_refresh_token(
+            session,
+            family_id=uuid.uuid4(),
+            client_id=client.client_id,
+            user_id=user.id,
+            scope=row.scope,
+            auth_time=row.auth_time,
+            expires_delta=timedelta(seconds=client.refresh_token_ttl_seconds),
+        )
+        response["refresh_token"] = refresh_value
+    if id_token is not None:
+        response["id_token"] = id_token
 
     await _audit(
         session,
@@ -387,16 +590,6 @@ async def _authorization_code_grant(session: Any, request: Request, client: Any,
         resource_id=client.client_id,
         resource_type="oidc_client",
     )
-
-    response: dict[str, Any] = {
-        "access_token": access,
-        "token_type": oidc_tokens.TOKEN_TYPE_BEARER,
-        "expires_in": client.access_token_ttl_seconds,
-        "refresh_token": refresh_value,
-        "scope": row.scope,
-    }
-    if id_token is not None:
-        response["id_token"] = id_token
     return response
 
 
@@ -511,7 +704,7 @@ async def _client_credentials_grant(session: Any, request: Request, client: Any,
         raise OIDCAuthzError("unauthorized_client", "client_credentials is restricted to first-party clients")
 
     requested = set(str(form.get("scope") or "").split())
-    allowed = set(client.scopes) - {"openid"}
+    allowed = set(client.scopes) - {"openid", "offline_access"}
     if requested - allowed:
         raise OIDCAuthzError("invalid_scope", "Requested scope exceeds the registered grant")
     scope = " ".join(sorted(requested & allowed)) if requested else " ".join(sorted(allowed))

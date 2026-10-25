@@ -41,7 +41,7 @@ admin_router = APIRouter(prefix="/admin/oidc", tags=["Admin - OIDC"])
 
 issuer_router = APIRouter()
 
-_OPENID_SCOPES = ["openid", "profile", "phone"]
+_OPENID_SCOPES = ["openid", "profile", "phone", "offline_access"]
 _OPENID_GRANT_TYPES = ["authorization_code", "refresh_token", "client_credentials"]
 _OPENID_CLAIMS = [
     "iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp",
@@ -69,6 +69,7 @@ async def openid_configuration(request: Request) -> dict:
         "token_endpoint": endpoints["token"],
         "userinfo_endpoint": endpoints["userinfo"],
         "revocation_endpoint": endpoints["revocation"],
+        "end_session_endpoint": endpoints["end_session"],
         "jwks_uri": endpoints["jwks"],
         "response_types_supported": ["code"],
         "grant_types_supported": _OPENID_GRANT_TYPES,
@@ -112,6 +113,25 @@ async def token_endpoint(request: Request, session: AsyncSession = Depends(get_s
             status_code=503,
             content={"error": "temporarily_unavailable", "error_description": str(exc)},
         )
+
+
+@issuer_router.post("/oidc/introspect", include_in_schema=False)
+async def introspect_endpoint(request: Request, session: AsyncSession = Depends(get_session)):
+    form = {key: str(value) for key, value in (await request.form()).items()}
+    try:
+        return await grant_service.introspect(session, request, form)
+    except OIDCAuthzError as exc:
+        www_authenticate = 'Basic realm="swx-oidc"' if exc.status_code == 401 else None
+        return _oidc_error_response(exc, www_authenticate)
+
+
+@issuer_router.get("/oidc/logout", include_in_schema=False)
+async def end_session_endpoint(request: Request, session: AsyncSession = Depends(get_session)):
+    params = {key: str(value) for key, value in request.query_params.items()}
+    try:
+        return await grant_service.end_session(session, request, params)
+    except OIDCAuthzError as exc:
+        return _oidc_error_response(exc)
 
 
 @issuer_router.post("/oidc/revoke", include_in_schema=False)

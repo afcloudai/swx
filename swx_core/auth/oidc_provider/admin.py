@@ -28,7 +28,7 @@ from swx_core.security.password_security import get_password_hash
 from swx_core.services.audit_logger import ActorType, AuditAction, AuditLogger, AuditOutcome
 
 SUPPORTED_GRANT_TYPES = frozenset({"authorization_code", "refresh_token", "client_credentials"})
-SUPPORTED_SCOPES = frozenset({"openid", "profile", "phone"})
+SUPPORTED_SCOPES = frozenset({"openid", "profile", "phone", "offline_access"})
 
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _FORBIDDEN_REDIRECT_CHARS = frozenset("*? \t\r\n")
@@ -56,6 +56,19 @@ def _validate_redirect_uris(redirect_uris: list[str]) -> None:
             raise OIDCValidationError(f"Redirect URI must not contain a fragment: {uri!r}")
         if any(ch in _FORBIDDEN_REDIRECT_CHARS for ch in uri):
             raise OIDCValidationError(f"Redirect URI contains forbidden characters: {uri!r}")
+
+
+def _validate_optional_uri_list(uris: list[str]) -> list[str]:
+    """Post-logout redirect URIs: fragment-free + wildcard-free; empty list = no redirects allowed."""
+    for uri in uris:
+        parts = urlsplit(uri)
+        if not parts.scheme or not parts.netloc:
+            raise OIDCValidationError(f"Post-logout redirect URI must be absolute: {uri!r}")
+        if parts.fragment:
+            raise OIDCValidationError(f"Post-logout redirect URI must not contain a fragment: {uri!r}")
+        if any(ch in _FORBIDDEN_REDIRECT_CHARS for ch in uri):
+            raise OIDCValidationError(f"Post-logout redirect URI contains forbidden characters: {uri!r}")
+    return uris
 
 
 def _validate_collection_field(values: list[str], allowed: frozenset[str], field: str) -> None:
@@ -120,12 +133,14 @@ async def create_client(
     if secret_hash is None and "client_credentials" in grant_types:
         raise OIDCValidationError("client_credentials requires a confidential client (client_secret)")
 
+    post_logout_uris = _validate_optional_uri_list(body.post_logout_redirect_uris or [])
     data: dict[str, Any] = {
         "name": body.name,
         "client_id": client_id,
         "client_secret_hash": secret_hash,
         "logo_url": body.logo_url,
         "redirect_uris": body.redirect_uris,
+        "post_logout_redirect_uris": post_logout_uris,
         "grant_types": grant_types,
         "scopes": scopes,
         "is_first_party": body.is_first_party,
@@ -177,6 +192,8 @@ async def update_client(
     updates: dict[str, Any] = body.model_dump(exclude_unset=True, exclude={"client_secret"})
     if body.redirect_uris is not None:
         _validate_redirect_uris(body.redirect_uris)
+    if body.post_logout_redirect_uris is not None:
+        updates["post_logout_redirect_uris"] = _validate_optional_uri_list(body.post_logout_redirect_uris)
     if body.grant_types is not None:
         _validate_collection_field(body.grant_types, SUPPORTED_GRANT_TYPES, "grant_types")
     if body.scopes is not None:

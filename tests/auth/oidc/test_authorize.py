@@ -163,18 +163,6 @@ class TestAuthorizeErrorRedirects:
             response = await gv.authorize(MagicMock(), request, valid_params(code_challenge_method="plain"))
         assert _redirect_fields(response)["error"] == "invalid_request"
 
-    async def test_openid_scope_requires_nonce(self) -> None:
-        request = _request()
-        audit = _audit_mock()
-        with (
-            patch.object(oidc_repo, "get_client_by_public_id", AsyncMock(return_value=client_row())),
-            patch.object(gv, "AuditLogger", return_value=audit),
-        ):
-            response = await gv.authorize(MagicMock(), request, valid_params(nonce=""))
-
-        assert _redirect_fields(response)["error"] == "invalid_request"
-        assert audit.log_event.await_args.kwargs["action"] == AuditAction.AUTH_OIDC_AUTHORIZE_DENIED
-
 
 class TestAuthorizeHappyPaths:
     async def test_anonymous_user_gets_login_redirect_with_pending_grant(self) -> None:
@@ -224,17 +212,52 @@ class TestAuthorizeHappyPaths:
         actions = [call.kwargs["action"] for call in audit_logger.return_value.log_event.await_args_list]
         assert AuditAction.AUTH_CONSENT_GRANTED in actions
 
-    async def test_confidential_client_without_pkce_is_allowed(self) -> None:
+    async def test_confidential_client_without_pkce_refused(self) -> None:
+        """OAuth 2.1: PKCE is mandatory for ALL clients (test-codified deviation from L-8)."""
         request = _request()
         confidential = client_row(client_secret_hash="$2b$12$dummy")
+        audit = _audit_mock()
         params = {k: v for k, v in valid_params().items() if not k.startswith("code_")}
         with (
             patch.object(oidc_repo, "get_client_by_public_id", AsyncMock(return_value=confidential)),
             patch.object(gv, "_resolve_optional_user", AsyncMock(return_value=(MagicMock(id=uuid.uuid4()), {"iat": 1760000000.0}))),
             patch.object(oidc_repo, "create_grant_code", AsyncMock(return_value=MagicMock())) as create_code,
             patch.object(oidc_repo, "upsert_consent", AsyncMock(return_value=MagicMock())),
+            patch.object(gv, "AuditLogger", return_value=audit),
+        ):
+            response = await gv.authorize(MagicMock(), request, params)
+
+        fields = _redirect_fields(response)
+        assert fields["error"] == "invalid_request" and fields["error_description"].startswith("PKCE")
+        create_code.assert_not_awaited()
+        assert audit.log_event.await_args.kwargs["action"] == AuditAction.AUTH_OIDC_AUTHORIZE_DENIED
+        assert audit.log_event.await_args.kwargs["context"]["reason"] == "pkce_missing_or_downgraded"
+
+    async def test_nonce_not_required_but_honored(self) -> None:
+        """OIDC Core: nonce is optional in the code flow — honored (stored) when present."""
+        request = _request()
+        with (
+            patch.object(oidc_repo, "get_client_by_public_id", AsyncMock(return_value=client_row())),
+            patch.object(gv, "_resolve_optional_user", AsyncMock(return_value=(MagicMock(id=uuid.uuid4()), {"iat": 1760000000.0}))),
+            patch.object(oidc_repo, "create_grant_code", AsyncMock(return_value=MagicMock())) as create_code,
+            patch.object(oidc_repo, "upsert_consent", AsyncMock(return_value=MagicMock())),
             patch.object(gv, "AuditLogger", return_value=_audit_mock()),
         ):
-            await gv.authorize(MagicMock(), request, params)
+            response = await gv.authorize(MagicMock(), request, valid_params())  # nonce present
 
-        assert create_code.await_args.args[1]["code_challenge"] is None
+        stored = create_code.await_args.args[1]
+        assert stored["nonce"] == "n-123"
+
+    async def test_nonce_absent_still_issues(self) -> None:
+        request = _request()
+        with (
+            patch.object(oidc_repo, "get_client_by_public_id", AsyncMock(return_value=client_row())),
+            patch.object(gv, "_resolve_optional_user", AsyncMock(return_value=(MagicMock(id=uuid.uuid4()), {"iat": 1760000000.0}))),
+            patch.object(oidc_repo, "create_grant_code", AsyncMock(return_value=MagicMock())) as create_code,
+            patch.object(oidc_repo, "upsert_consent", AsyncMock(return_value=MagicMock())),
+            patch.object(gv, "AuditLogger", return_value=_audit_mock()),
+        ):
+            response = await gv.authorize(MagicMock(), request, valid_params(nonce=""))
+
+        assert _redirect_fields(response)["code"]
+        assert create_code.await_args.args[1]["nonce"] is None

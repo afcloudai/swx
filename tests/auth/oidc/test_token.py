@@ -129,7 +129,7 @@ class TestAuthorizationCodeGrant:
             patches[1],
             patches[2],
             patches[3],
-            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row())),
+            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row(scope="openid phone offline_access"))),
             patch.object(oidc_repo, "consume_grant_code", AsyncMock(return_value=True)) as consume,
             patch.object(oidc_repo, "create_refresh_token", AsyncMock(return_value=MagicMock())),
         ):
@@ -137,7 +137,7 @@ class TestAuthorizationCodeGrant:
 
         assert response["token_type"] == "Bearer"
         assert response["expires_in"] == 3600
-        assert response["scope"] == "openid phone"
+        assert response["scope"] == "openid phone offline_access"
         access = _decode(response["access_token"], public_key, AUDIENCE)
         assert access["sub"] == str(USER_ID)
         assert access["client_id"] == CLIENT_ID
@@ -156,6 +156,27 @@ class TestAuthorizationCodeGrant:
         assert len(response["refresh_token"]) > 40
         consume.assert_awaited_once()
 
+    async def test_refresh_absent_without_offline_access(self) -> None:
+        """A6: refresh tokens are only minted when the offline_access scope was requested."""
+        key_row, _ = _key_harness()
+        session = MagicMock()
+        session.get = AsyncMock(return_value=MagicMock(id=USER_ID, is_active=True))
+        patches = _grant_patches(key_row, client_row())
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row())),
+            patch.object(oidc_repo, "consume_grant_code", AsyncMock(return_value=True)) as consume,
+            patch.object(oidc_repo, "create_refresh_token", AsyncMock()) as create_refresh,
+        ):
+            response = await gv.token(session, _request(), dict(FORM_CODE))
+
+        assert "refresh_token" not in response
+        create_refresh.assert_not_awaited()
+        consume.assert_awaited_once()
+
     async def test_replay_refused_and_audited(self) -> None:
         key_row, _ = _key_harness()
         session = MagicMock()
@@ -165,7 +186,7 @@ class TestAuthorizationCodeGrant:
             patches[1],
             patches[2],
             patches[3] as audit_logger,
-            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row())),
+            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row(scope="openid phone offline_access"))),
             patch.object(oidc_repo, "consume_grant_code", AsyncMock(return_value=False)),
         ):
             audit_logger.return_value.log_event = AsyncMock()
@@ -182,7 +203,7 @@ class TestAuthorizationCodeGrant:
             patches[1],
             patches[2],
             patches[3],
-            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row())),
+            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row(scope="openid phone offline_access"))),
             patch.object(oidc_repo, "consume_grant_code", AsyncMock(return_value=True)) as consume,
         ):
             with pytest.raises(OIDCAuthzError, match="does not match"):
@@ -232,7 +253,7 @@ class TestAuthorizationCodeGrant:
             patches[1],
             patches[2],
             patches[3],
-            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row())),
+            patch.object(oidc_repo, "get_grant_code_by_hash", AsyncMock(return_value=_code_row(scope="openid phone offline_access"))),
             patch.object(oidc_repo, "consume_grant_code", AsyncMock(return_value=True)) as consume,
         ):
             with pytest.raises(OIDCAuthzError, match="PKCE verification failed"):

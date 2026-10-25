@@ -32,7 +32,7 @@ from swx_core.utils.time import utc_now
 
 
 class UserBase(Base):
-    email: EmailStr = Field(unique=True, index=True, max_length=255)
+    email: EmailStr | None = Field(default=None, max_length=255, sa_column=Column(String(255), unique=True, index=True, nullable=True))
     is_active: bool = True
     is_superuser: bool = False
     full_name: Optional[str] = Field(default=None, max_length=255)
@@ -134,7 +134,7 @@ class UserCreate(SQLModel):
         preferred_language (Optional[str]): Preferred language (default: 'en').
     """
 
-    email: EmailStr = Field(max_length=255)
+    email: EmailStr | None = Field(default=None, max_length=255)
     password: str = Field(min_length=8, max_length=40)
     full_name: Optional[str] = Field(default=None, max_length=255)
     preferred_language: Optional[str] = Field(default="en", max_length=3)

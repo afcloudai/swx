@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from swx_core.models.social_account import SocialAccount
 from swx_core.models.user import User
 from swx_core.services.audit_logger import ActorType, AuditAction, AuditLogger, AuditOutcome
+from swx_core.utils.time import utc_now
 
 
 async def _audit(session: AsyncSession, *, context: dict, user: User) -> None:
@@ -107,3 +108,38 @@ async def resolve_user_by_idp_sub(session: AsyncSession, idp_sub: str, idp: str)
     if account is None:
         return None
     return await session.get(User, account.user_id)
+
+
+async def provision_federated_identity(
+    session: AsyncSession,
+    *,
+    idp: str,
+    idp_sub: str,
+    phone: str | None = None,
+    full_name: str | None = None,
+) -> User:
+    """Stage-1 fallback: provision a local identity from verified IdP claims.
+
+    Email stays None (optional forever — phone-first norm); the verified-phone
+    claim seeds ``phone_verified_at`` so the identity links + matches by phone
+    immediately. Platform LOGIN for email-less personas lands with the subject
+    migration (D-10); until then consumers resolve the identity via its `sub`.
+    """
+    if not phone:
+        raise ValueError("federated provisioning requires the phone claim")
+
+    user = User(
+        email=None,
+        hashed_password=None,
+        auth_provider=idp,
+        provider_id=idp_sub,
+        full_name=full_name,
+        phone=phone,
+        phone_verified_at=utc_now(),
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    await link_external_identity(session, user, idp_sub, idp, phone_verified_claim=True)
+    return user

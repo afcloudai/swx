@@ -69,6 +69,26 @@ class SecuritySettingsMixin(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_oidc_issuer_outside_development(self):
+        """Fail settings load when the OIDC issuer is unset outside development.
+
+        IDP-008 gate (M-2): an unset issuer is derived from ``request.base_url``,
+        so Host headers could poison the discovery document and token audiences.
+        Production must pin the issuer explicitly.
+        """
+        environment = getattr(self, "ENVIRONMENT", "local")
+        if environment in _DEVELOPMENT_ENVIRONMENTS:
+            return self
+
+        if not getattr(self, "SWX_OIDC_ISSUER", None):
+            raise ValueError(
+                "SWX_OIDC_ISSUER must be set explicitly (e.g. https://auth.example.com) in "
+                f"ENVIRONMENT={environment!r}: a request-derived issuer lets Host headers "
+                "poison the OIDC discovery document and token audiences."
+            )
+        return self
+
     def model_post_init(self, __context) -> None:
         # Development fallback: fill unset keys with a random per-process value so
         # local boot needs no .env. In staging/production the validator has already
@@ -94,5 +114,38 @@ class SecuritySettingsMixin(BaseSettings):
         description=(
             "Set the Secure flag on the session cookie. "
             "Default (None) derives from ENVIRONMENT: True in production/staging, False locally."
+        ),
+    )
+
+    # OIDC identity provider (SWX-IDM-001)
+    SWX_OIDC_ISSUER: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute issuer URL (e.g. https://auth.afcloudai.com). "
+            "When unset, derived from the request base URL + ROUTE_PREFIX."
+        ),
+    )
+    SWX_OIDC_LOGIN_URL: str = Field(
+        default="/auth/cookie/login",
+        description=(
+            "Where /oidc/authorize redirects unauthenticated users to authenticate; "
+            "the IdP app UI mounts here and redirects back to the authorize URL."
+        ),
+    )
+    SWX_OIDC_CODE_TTL_SECONDS: int = Field(default=60, description="Authorization-code TTL (single use)")
+    SWX_OIDC_ID_TOKEN_TTL_SECONDS: int = Field(default=3600, description="id_token TTL")
+    SWX_OIDC_ACCESS_TTL_SECONDS: int = Field(default=3600, description="OIDC access-token TTL")
+    SWX_OIDC_REFRESH_TTL_SECONDS: int = Field(default=1209600, description="OIDC refresh-token TTL")
+    SWX_OIDC_KEY_RETIREMENT_DAYS: int = Field(
+        default=30, description="Days a demoted signing key stays verify-only before retirement"
+    )
+    SWX_OIDC_DEFAULT_SIGNING_ALGORITHM: str = Field(
+        default="RS256", description="Default id_token signing algorithm (RS256 or EdDSA)"
+    )
+    SWX_PHONE_VERIFICATION_CHANNEL: Optional[str] = Field(
+        default=None,
+        description=(
+            "Registered PhoneVerificationChannel name for phone-verification OTP delivery "
+            "(register via register_phone_channel(); default logs the code — no transport configured)."
         ),
     )

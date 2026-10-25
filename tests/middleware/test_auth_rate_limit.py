@@ -431,9 +431,21 @@ class TestLoadRulesFromEnv:
         assert rules[1].path_prefix == "/api/auth/verify"
         assert rules[1].methods == ("GET", "POST")
 
-    def test_empty_env_returns_empty_list(self):
-        """Empty or missing env var returns empty list."""
+    def test_missing_env_returns_default_oidc_rules(self):
+        """Missing env ships the default ruleset covering the OIDC surface."""
         with patch.dict(os.environ, {}, clear=True):
+            rules = _load_rules_from_env()
+
+        namespaces = {rule.namespace for rule in rules}
+        assert {"oidc-token", "oidc-revoke", "oidc-userinfo", "oidc-authorize", "oidc-admin"} <= namespaces
+        by_ns = {rule.namespace: rule for rule in rules}
+        assert by_ns["oidc-token"].exact_path == "/api/oidc/token"
+        assert by_ns["oidc-token"].methods == ("POST",)
+        assert by_ns["oidc-authorize"].path_prefix == "/api/oidc/authorize"
+
+    def test_explicitly_empty_env_opt_out(self):
+        """Explicitly set and empty env value disables auth rate limiting."""
+        with patch.dict(os.environ, {"SWX_AUTH_RATE_LIMIT_RULES": ""}):
             rules = _load_rules_from_env()
         assert rules == []
 
@@ -517,7 +529,18 @@ class TestApplyMiddleware:
         mock_app.add_middleware.assert_called_once()
 
     def test_apply_middleware_without_rules_skips(self):
-        """apply_middleware does not register when no rules are configured."""
+        """apply_middleware opts out when the env explicitly sets an empty ruleset."""
+        from fastapi import FastAPI
+
+        mock_app = MagicMock(spec=FastAPI)
+
+        with patch.dict(os.environ, {"SWX_AUTH_RATE_LIMIT_RULES": ""}):
+            apply_middleware(mock_app)
+
+        mock_app.add_middleware.assert_not_called()
+
+    def test_apply_middleware_registers_default_oidc_rules(self):
+        """Missing env ships the default /oidc/* ruleset (M-1) — middleware registers."""
         from fastapi import FastAPI
 
         mock_app = MagicMock(spec=FastAPI)
@@ -525,7 +548,8 @@ class TestApplyMiddleware:
         with patch.dict(os.environ, {}, clear=True):
             apply_middleware(mock_app)
 
-        mock_app.add_middleware.assert_not_called()
+        mock_app.add_middleware.assert_called_once()
+        assert mock_app.add_middleware.call_args.args[0] is AuthRateLimitMiddleware
 
     def test_apply_middleware_raises_for_non_fastapi(self):
         """apply_middleware raises TypeError for non-FastAPI apps."""

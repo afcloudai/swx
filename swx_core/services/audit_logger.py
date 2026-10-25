@@ -65,6 +65,11 @@ class AuditAction(str, Enum):
     AUTH_TOKEN_REVOKED = "auth.token_revoked"
     AUTH_TOKEN_FAMILY_REVOKED = "auth.token_family_revoked"
     AUTH_OAUTH_KEY_ROTATED = "auth.oauth_key_rotated"
+    AUTH_OIDC_AUTHORIZE_DENIED = "auth.oidc_authorize_denied"
+    AUTH_OIDC_TOKEN_DENIED = "auth.oidc_token_denied"
+    AUTH_PHONE_VERIFICATION_REQUESTED = "auth.phone_verification_requested"
+    AUTH_PHONE_VERIFICATION_CONFIRMED = "auth.phone_verification_confirmed"
+    AUTH_IDENTITY_LINKED = "auth.identity_linked"
 
     # RBAC events
     RBAC_ROLE_ASSIGNED = "rbac.role_assigned"
@@ -209,9 +214,15 @@ class AuditLogger:
             await enqueue_siem_event(action, safe_context)
 
         except Exception as e:
-            # Audit logging should not crash the main request flow, but it must be logged.
+            # Audit logging must never crash the request flow. Containment is
+            # two-level: the failed entry is dropped AND even the rollback is
+            # guarded — an unusable audit session (connection loss, tests) must
+            # not mask the refusal/issuance result the caller is returning.
             logger.error(f"Failed to record audit log: {e}", exc_info=True)
-            await self.session.rollback()
+            try:
+                await self.session.rollback()
+            except Exception:
+                logger.critical("Audit-log rollback also failed; leaving session disposal to the caller.")
 
     def _filter_sensitive_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

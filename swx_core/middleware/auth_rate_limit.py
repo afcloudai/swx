@@ -181,21 +181,19 @@ class AuthRateLimitMiddleware:
         await self.app(scope, receive, send)
 
 
-def _load_rules_from_env() -> list[RateLimitRule]:
-    """Parse rate limit rules from the ``SWX_AUTH_RATE_LIMIT_RULES`` env var."""
-    raw = os.getenv("SWX_AUTH_RATE_LIMIT_RULES", "").strip()
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-        if not isinstance(parsed, list):
-            return []
-    except json.JSONDecodeError:
-        logger.warning("SWX_AUTH_RATE_LIMIT_RULES is not valid JSON, auth rate limiting disabled")
-        return []
+_DEFAULT_RULE_SPECS: list[dict] = [
+    {"namespace": "oidc-token", "exact_path": "/api/oidc/token", "methods": ["POST"], "max_requests": 10, "window_seconds": 60},
+    {"namespace": "oidc-revoke", "exact_path": "/api/oidc/revoke", "methods": ["POST"], "max_requests": 10, "window_seconds": 60},
+    {"namespace": "oidc-userinfo", "exact_path": "/api/oidc/userinfo", "methods": ["GET"], "max_requests": 60, "window_seconds": 60},
+    {"namespace": "oidc-authorize", "path_prefix": "/api/oidc/authorize", "methods": ["GET"], "max_requests": 20, "window_seconds": 60},
+    {"namespace": "oidc-admin", "path_prefix": "/api/admin/oidc", "max_requests": 30, "window_seconds": 60},
+]
 
+
+def _rules_from_specs(specs: list) -> list[RateLimitRule]:
+    """Shared parser for the shipped default rules and operator-provided rules."""
     rules: list[RateLimitRule] = []
-    for entry in parsed:
+    for entry in specs:
         if not isinstance(entry, dict):
             continue
         namespace = entry.get("namespace", "")
@@ -219,6 +217,31 @@ def _load_rules_from_env() -> list[RateLimitRule]:
             window_seconds=window_seconds,
         ))
     return rules
+
+
+def _load_rules_from_env() -> list[RateLimitRule]:
+    """Resolve the auth rate-limit rules.
+
+    - Env unset ⇒ shipped default ruleset covering the OIDC issuer surface
+      (``/api/oidc/token|revoke|userinfo|authorize`` and ``/api/admin/oidc``).
+    - Explicit empty string ⇒ operator opt-out (no auth rate limiting).
+    - Otherwise the JSON rules list is parsed.
+    """
+    raw = os.environ.get("SWX_AUTH_RATE_LIMIT_RULES")
+    if raw is None:
+        return _rules_from_specs(_DEFAULT_RULE_SPECS)
+    raw = raw.strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return []
+    except json.JSONDecodeError:
+        logger.warning("SWX_AUTH_RATE_LIMIT_RULES is not valid JSON, auth rate limiting disabled")
+        return []
+
+    return _rules_from_specs(parsed)
 
 
 def apply_middleware(app: ASGIApp) -> None:

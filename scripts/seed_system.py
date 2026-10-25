@@ -72,6 +72,9 @@ PERMISSIONS = [
     {"name": "job:write", "resource_type": "job", "action": "write", "description": "Retry jobs"},
     {"name": "policy:read", "resource_type": "policy", "action": "read", "description": "List/view policies"},
     {"name": "policy:write", "resource_type": "policy", "action": "write", "description": "Create/update policies"},
+    {"name": "idp:clients:read", "resource_type": "idp", "action": "read", "description": "View OIDC identity-provider clients"},
+    {"name": "idp:clients:write", "resource_type": "idp", "action": "write", "description": "Create/update OIDC identity-provider clients"},
+    {"name": "idp:clients:manage", "resource_type": "idp", "action": "manage", "description": "Full management of OIDC identity-provider clients"},
 ]
 
 
@@ -112,6 +115,7 @@ ROLE_PERMISSIONS = {
         "user:read", "user:write", "team:read", "team:write", "team:manage",
         "billing:read", "billing:write", "audit:read", "job:read", "job:write",
         "policy:read", "policy:write",
+        "idp:clients:read", "idp:clients:write", "idp:clients:manage",
     ],
     "team_owner": ["user:read", "team:read", "team:write", "team:manage", "billing:read", "billing:write"],
     "team_member": ["user:read", "team:read"],

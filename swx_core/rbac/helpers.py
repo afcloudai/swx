@@ -18,6 +18,7 @@ from swx_core.models.role import Role
 from swx_core.models.user_role import UserRole
 from swx_core.models.role_permission import RolePermission
 from swx_core.models.team_member import TeamMember
+from swx_core.models.admin_user_role import AdminUserRole
 from swx_core.auth.auth_cache import user_auth_cache, get_cached_roles, set_cached_roles
 
 
@@ -199,3 +200,53 @@ async def check_team_permission(
 
     # Fallback: check global permission
     return await has_permission(session, user, permission_name, team_id=None)
+
+
+async def get_admin_permissions(
+    session: AsyncSession,
+    admin_user_id: UUID,
+    domain: Optional[str] = None,
+) -> List[Permission]:
+    """Resolve permissions granted to an ADMIN identity through its role bindings.
+
+    Admin identities carry roles via ``swx_admin_user_roles`` (mirroring the
+    user-domain ``swx_user_role`` join); ``domain`` filters on ``Role.domain``
+    (pass ``"admin"`` for admin-surface checks).
+    """
+    query = (
+        select(Permission)
+        .join(RolePermission)  # pyright: ignore[reportArgumentType]
+        .join(Role)  # pyright: ignore[reportArgumentType]
+        .join(AdminUserRole, AdminUserRole.role_id == cast(Any, Role.id))  # pyright: ignore[reportArgumentType]
+        .where(AdminUserRole.admin_user_id == admin_user_id)
+    )
+
+    if domain is not None:
+        query = query.where(cast(Any, Role.domain) == domain)
+
+    result = await session.execute(query)
+    return list(result.scalars().unique().all())
+
+
+async def has_admin_permission(
+    session: AsyncSession,
+    admin_user: Any,
+    permission_name: str,
+    domain: str = "admin",
+) -> bool:
+    """FAIL-CLOSED permission check for admin identities — no bypass.
+
+    Sole carve-out: the platform root operator (``settings.FIRST_SUPERUSER``
+    email), which ``db_setup`` provisions as the domain superuser; without it a
+    fresh install could not grant the first binding. Every other admin must
+    hold the permission via an ``AdminUserRole`` binding.
+
+    Note: unlike the user-domain cache, admin permission checks query DB
+    directly (admins are few; avoids cache-coherence work for now).
+    """
+    root_email = getattr(settings, "FIRST_SUPERUSER", None)
+    if root_email and getattr(admin_user, "email", None) == root_email:
+        return True
+
+    permissions = await get_admin_permissions(session, admin_user.id, domain=domain)
+    return permission_name in {permission.name for permission in permissions}

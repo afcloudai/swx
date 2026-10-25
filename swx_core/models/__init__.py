@@ -212,6 +212,22 @@ from swx_core.models.erasure_certificate import (
     ErasureCertificateCreate,
     ErasureCertificatePublic,
 )
+from swx_core.auth.oidc_provider.models import (
+    OIDCClient,
+    OIDCClientCreate,
+    OIDCClientPublic,
+    OIDCClientUpdate,
+    OIDCConsent,
+    OIDCConsentCreate,
+    OIDCConsentPublic,
+    OIDCGrantCode,
+    OIDCGrantCodePublic,
+    OIDCRefreshToken,
+    OIDCRefreshTokenPublic,
+    OIDCSigningKey,
+    OIDCSigningKeyCreate,
+    OIDCSigningKeyPublic,
+)
 
 __all__ = [
     # Base
@@ -392,4 +408,19 @@ __all__ = [
     "ErasureCertificate",
     "ErasureCertificateCreate",
     "ErasureCertificatePublic",
+    # OIDC identity provider (SWX-IDM-001)
+    "OIDCClient",
+    "OIDCClientCreate",
+    "OIDCClientPublic",
+    "OIDCClientUpdate",
+    "OIDCConsent",
+    "OIDCConsentCreate",
+    "OIDCConsentPublic",
+    "OIDCGrantCode",
+    "OIDCGrantCodePublic",
+    "OIDCRefreshToken",
+    "OIDCRefreshTokenPublic",
+    "OIDCSigningKey",
+    "OIDCSigningKeyCreate",
+    "OIDCSigningKeyPublic",
 ]

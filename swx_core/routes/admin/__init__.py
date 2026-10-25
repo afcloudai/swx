@@ -17,6 +17,7 @@ from .job_route import router as job_router
 from .ledger_route import router as ledger_router
 from .llm_route import router as llm_router
 from .notification_provider_route import router as notification_provider_router
+from .oidc_route import router as oidc_router
 from .organization_route import router as organization_router
 from .permission_route import router as permission_router
 from .policy_route import router as policy_router
@@ -57,6 +58,7 @@ router.include_router(webhook_router)
 router.include_router(conversation_router)
 router.include_router(safety_router)
 router.include_router(sso_router)
+router.include_router(oidc_router)
 router.include_router(status_router)
 router.include_router(data_transfer_router)
 router.include_router(feature_flag_router)

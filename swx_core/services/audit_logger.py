@@ -55,6 +55,17 @@ class AuditAction(str, Enum):
     AUTH_ACCOUNT_UNLOCKED = "auth.account_unlocked"
     AUTH_PASSWORD_RESET_RATE_LIMITED = "auth.password_reset_rate_limited"
 
+    # OIDC identity-provider events (SWX-IDM-001)
+    AUTH_OAUTH_CLIENT_CREATED = "auth.oauth_client_created"
+    AUTH_OAUTH_CLIENT_UPDATED = "auth.oauth_client_updated"
+    AUTH_OAUTH_CLIENT_DELETED = "auth.oauth_client_deleted"
+    AUTH_CONSENT_GRANTED = "auth.consent_granted"
+    AUTH_CONSENT_REVOKED = "auth.consent_revoked"
+    AUTH_TOKEN_ISSUED = "auth.token_issued"
+    AUTH_TOKEN_REVOKED = "auth.token_revoked"
+    AUTH_TOKEN_FAMILY_REVOKED = "auth.token_family_revoked"
+    AUTH_OAUTH_KEY_ROTATED = "auth.oauth_key_rotated"
+
     # RBAC events
     RBAC_ROLE_ASSIGNED = "rbac.role_assigned"
     RBAC_ROLE_REMOVED = "rbac.role_removed"

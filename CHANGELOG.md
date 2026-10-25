@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.31.1] - 2026-10-25
+
+### Fixed
+
+- **Consumer callback regression** — the v2.31 oauth-callback rewire dropped the
+  existing-email lookup; email identities re-hitting the generic provider callback
+  re-registered (duplicate email). Restored `get_user_by_email` before the register
+  path + shipped as v2.31.1 (the v2.31.0 wheel predates the fix).
+
 ## [2.31.0] - 2026-10-25
 
 ### Added (SWX-IDM-001 v2.31 — OIDC full-conformance + identity gate + D-9 recovery)

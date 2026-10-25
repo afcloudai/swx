@@ -43,7 +43,7 @@ async def request_recovery(
     session: SessionDep,
 ) -> dict[str, str]:
     try:
-        return await recovery_service.request_phone_recovery(session, body.phone, request=request)
+        return await recovery_service.request_phone_recovery(session, body.phone)
     except LookupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -57,7 +57,7 @@ async def confirm_recovery(
 ) -> dict[str, str]:
     try:
         return await recovery_service.confirm_phone_recovery(
-            session, phone=body.phone, code=body.code, new_password=body.new_password, request=request
+            session, phone=body.phone, code=body.code, new_password=body.new_password
         )
     except OtpInvalidError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

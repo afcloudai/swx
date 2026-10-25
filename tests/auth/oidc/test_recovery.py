@@ -48,7 +48,7 @@ class TestRecoveryRequest:
             patch.object(oidc_repo, "find_user_by_verified_phone", AsyncMock(return_value=None)),
             patch.object(recovery_service, "resolve_phone_channel", return_value=channel),
         ):
-            result = await recovery_service.request_phone_recovery(session, "+19990000000", request=None)
+            result = await recovery_service.request_phone_recovery(session, "+19990000000")
 
         assert result == {"status": "processed"}
         channel.send_verification_code.assert_not_awaited()
@@ -98,7 +98,7 @@ class TestRecoveryConfirm:
             patch.object(oidc_repo, "revoke_families_for_user", new=families),
         ):
             result = await recovery_service.confirm_phone_recovery(
-                session, phone=PHONE, code=delivered_code, new_password="new-password-9", request=None
+                session, phone=PHONE, code=delivered_code, new_password="new-password-9"
             )
 
         assert result == {"status": "reset"}

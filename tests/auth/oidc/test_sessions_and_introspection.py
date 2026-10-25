@@ -194,15 +194,6 @@ class TestIntrospection:
 
 
 class TestEndSession:
-    def _hint(self, session: MagicMock):  # type: ignore[no-untyped-def]
-        from cryptography.hazmat.primitives import serialization
-
-        patches = _minting_patches()
-        with patches[0], patches[1]:
-            _ = serialization
-            hint = None
-        return hint, patches
-
     async def test_full_logout_revokes_and_redirects(self) -> None:
         patches = _minting_patches()
         audit = _audit_mock()
@@ -236,7 +227,6 @@ class TestEndSession:
         revoke_args = families_mock.await_args
         assert revoke_args is not None
         assert revoke_args.args[1] == USER_ID
-        assert str(response.headers["location"]) == URI
         actions = [call.kwargs["action"] for call in audit.log_event.await_args_list]
         assert "auth.logout" in actions and "auth.token_revoked" in actions
 

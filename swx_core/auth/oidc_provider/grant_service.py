@@ -72,14 +72,12 @@ async def end_session(session: Any, request: Request, params: dict[str, Any]) ->
     refresh family, clears the platform session, then redirects ONLY to an
     exactly-registered ``post_logout_redirect_uri`` (never attacker URLs).
     """
-    import uuid as _uuid
-
     hint = params.get("id_token_hint")
     post_logout_redirect_uri = params.get("post_logout_redirect_uri")
     state = params.get("state") or None
 
     client: Any = None
-    subject: _uuid.UUID | None = None
+    subject: uuid.UUID | None = None
     if hint:
         try:
             payload = await oidc_tokens.verify_oidc_access_token(session, str(hint))
@@ -92,7 +90,7 @@ async def end_session(session: Any, request: Request, params: dict[str, Any]) ->
             client = await oidc_repo.get_client_by_public_id(session, audience)
         subject_value = payload.get("sub")
         try:
-            subject = _uuid.UUID(str(subject_value))
+            subject = uuid.UUID(str(subject_value))
         except ValueError:
             raise OIDCAuthzError("invalid_request", "Invalid id_token_hint", status_code=400) from None
 

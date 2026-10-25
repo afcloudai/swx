@@ -515,26 +515,29 @@ async def provider_auth_callback(request: Request, session: SessionDep, provider
             is_new_user = existing_user is None
 
         if existing_user is None and email:
-            if not idp_subject:
-                return error_redirect("missing_provider_id")
+            existing_user = await get_user_by_email(session=session, email=email)
+            is_new_user = existing_user is None
+            if is_new_user:
+                if not idp_subject:
+                    return error_redirect("missing_provider_id")
 
-            # Create user with proper event emission
-            user_in = UserCreate(
-                email=email,
-                password=secrets.token_urlsafe(28),  # Random placeholder, unused for social auth
-                full_name=user_info.get("name"),
-            )
+                # Create user with proper event emission
+                user_in = UserCreate(
+                    email=email,
+                    password=secrets.token_urlsafe(28),  # Random placeholder, unused for social auth
+                    full_name=user_info.get("name"),
+                )
 
-            existing_user = await register_user_service(
-                session=session,
-                user_in=user_in,
-                request=request,
-                auth_provider=provider,
-                provider_id=str(idp_subject),
-                event_context={"social_provider": provider},
-                pre_register_hook=registration_hooks.pre_register,
-                post_register_hook=registration_hooks.post_register,
-            )
+                existing_user = await register_user_service(
+                    session=session,
+                    user_in=user_in,
+                    request=request,
+                    auth_provider=provider,
+                    provider_id=str(idp_subject),
+                    event_context={"social_provider": provider},
+                    pre_register_hook=registration_hooks.pre_register,
+                    post_register_hook=registration_hooks.post_register,
+                )
 
         if existing_user is None:
             # No email and no linked subject: phone-VERIFIED IdP claims still

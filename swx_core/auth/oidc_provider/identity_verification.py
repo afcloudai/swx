@@ -37,9 +37,6 @@ from swx_core.utils.time import utc_now
 logger = logging.getLogger("swx_core.oidc.identity_verification")
 
 _EMAIL_OTP_KEY = "email-verification"
-_EMAIL_CHANNELS: dict[str, Any] = {}
-
-REQUIRED_MODES = ("none", "phone", "email", "both")
 
 
 class EmailOtpChannel(Protocol):
@@ -51,6 +48,9 @@ class LoggingEmailOtpChannel:
 
     async def send_verification_code(self, *, email: str, code: str) -> None:
         logger.info("Email verification code for %s: %s", email, code)
+
+
+_EMAIL_CHANNELS: dict[str, EmailOtpChannel] = {}
 
 
 def register_email_channel(name: str, channel: EmailOtpChannel) -> None:
@@ -115,7 +115,7 @@ async def _audit(
     )
 
 
-async def request_identity_verification(session: AsyncSession, user: User, *, request: Any = None) -> dict[str, Any]:
+async def request_identity_verification(session: AsyncSession, user: User) -> dict[str, Any]:
     """Deliver OTP to every required channel in one shot (dual delivery for ``both``).
 
     Returns the verification snapshot with the delivered channels. Refuses with
@@ -155,7 +155,7 @@ async def request_identity_verification(session: AsyncSession, user: User, *, re
 
 
 async def confirm_identity_verification(
-    session: AsyncSession, user: User, channel: str, code: str, *, request: Any = None
+    session: AsyncSession, user: User, channel: str, code: str
 ) -> dict[str, Any]:
     """Confirm one channel's OTP; sets that channel's verified timestamp."""
     if channel not in ("email", "phone"):

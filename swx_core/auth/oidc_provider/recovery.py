@@ -49,7 +49,7 @@ async def _audit(
     )
 
 
-async def request_phone_recovery(session: AsyncSession, phone: str, *, request: Request | None = None) -> dict[str, str]:
+async def request_phone_recovery(session: AsyncSession, phone: str) -> dict[str, str]:
     """Issue a recovery OTP to a VERIFIED phone — enumera-safe by construction."""
     user = await oidc_repo.find_user_by_verified_phone(session, phone.strip())
     if user is not None:
@@ -72,7 +72,6 @@ async def confirm_phone_recovery(
     phone: str,
     code: str,
     new_password: str,
-    request: Request | None = None,
 ) -> dict[str, str]:
     """Verify the recovery OTP; reset the password; kill every active credential."""
     user = await oidc_repo.find_user_by_verified_phone(session, phone.strip())

@@ -38,7 +38,7 @@ async def request_identity_verification(
     session: SessionDep,
 ) -> dict:
     try:
-        return await identity_verification_service.request_identity_verification(session, user, request=request)
+        return await identity_verification_service.request_identity_verification(session, user)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -53,7 +53,7 @@ async def confirm_identity_verification(
 ) -> dict:
     try:
         return await identity_verification_service.confirm_identity_verification(
-            session, user, body.channel, body.code, request=request
+            session, user, body.channel, body.code
         )
     except (ValueError, OtpInvalidError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

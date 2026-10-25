@@ -14,6 +14,7 @@ from .llm_route import router as llm_router
 from .mfa_route import router as mfa_router
 from .notification_route import router as notification_router
 from .organization_route import router as organization_router
+from .phone_verification_route import router as phone_verification_router
 from .referral_route import router as referral_router
 from .safety_route import router as safety_router
 from .session_route import router as session_router
@@ -42,3 +43,4 @@ router.include_router(status_router)
 router.include_router(data_transfer_router)
 router.include_router(feature_flag_router)
 router.include_router(referral_router)
+router.include_router(phone_verification_router)

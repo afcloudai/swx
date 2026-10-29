@@ -33,9 +33,13 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 from swx_core.middleware.logging_middleware import logger
+
+
+_DEFAULT_ALERT_THRESHOLD = 3
+_MIN_SLEEP = 1  # minimum seconds between job iterations to prevent tight loops
 
 
 @dataclass
@@ -48,6 +52,7 @@ class ScheduledJob:
     startup: bool = True
     error_policy: str = "log_and_continue"  # "log_and_continue" | "raise"
     _task: asyncio.Task[None] | None = field(default=None, repr=False, init=False)
+    _consecutive_failures: int = field(default=0, repr=False, init=False)
 
 
 class BackgroundScheduler:
@@ -57,15 +62,19 @@ class BackgroundScheduler:
     and then sleeps for ``interval`` seconds.  Errors are logged by default;
     set ``error_policy="raise"`` to crash the task on failure.
 
+    Consecutive failures above ``alert_threshold`` (default 3) emit alerts
+    through the SwX ``AlertEngine``.
+
     The scheduler itself is designed to be registered with
     ``LifecycleManager`` so it starts and stops with the app lifecycle.
     """
 
     name = "background_scheduler"
 
-    def __init__(self) -> None:
+    def __init__(self, *, alert_threshold: int = _DEFAULT_ALERT_THRESHOLD) -> None:
         self._jobs: dict[str, ScheduledJob] = {}
         self._running = False
+        self._alert_threshold = alert_threshold
 
     # -- registration --------------------------------------------------
 
@@ -163,7 +172,6 @@ class BackgroundScheduler:
 
     async def _run_loop(self, job: ScheduledJob) -> None:
         """Run a single job's handler in a loop with interval sleep."""
-        # If startup=False, sleep one interval before the first run.
         if not job.startup:
             await asyncio.sleep(job.interval)
 
@@ -173,20 +181,47 @@ class BackgroundScheduler:
                 await job.handler()
                 elapsed = time.monotonic() - start
                 logger.info("background.completed job=%s elapsed=%.2fs", job.name, elapsed)
+                if job._consecutive_failures > 0:
+                    logger.info("background.recovered job=%s after %d failures", job.name, job._consecutive_failures)
+                job._consecutive_failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                job._consecutive_failures += 1
                 if job.error_policy == "raise":
                     logger.error("background.fatal job=%s error=%s", job.name, exc)
                     raise
-                logger.exception("background.error job=%s", job.name)
+                logger.exception("background.error job=%s consecutive_failures=%d", job.name, job._consecutive_failures)
+                if job._consecutive_failures >= self._alert_threshold:
+                    await self._emit_failure_alert(job, exc)
 
-            # Sleep for the remainder of the interval, or the full interval
-            # if the handler took longer than expected.
             remaining = job.interval - (time.monotonic() - start)
-            if remaining > 0:
-                await asyncio.sleep(remaining)
+            await asyncio.sleep(max(remaining, _MIN_SLEEP))
+
+    async def _emit_failure_alert(self, job: ScheduledJob, exc: Exception) -> None:
+        """Emit an alert when a job exceeds the consecutive failure threshold."""
+        try:
+            from swx_core.services.channels.models import AlertSeverity, AlertSource
+            from swx_core.services.alert_engine import alert_engine
+
+            await alert_engine.emit(
+                severity=AlertSeverity.ERROR,
+                source=AlertSource.SYSTEM,
+                event_type="background_job_consecutive_failure",
+                message=f"Background job '{job.name}' failed {job._consecutive_failures} times consecutively",
+                metadata={
+                    "job_name": job.name,
+                    "consecutive_failures": job._consecutive_failures,
+                    "last_error": str(exc),
+                    "interval": job.interval,
+                },
+            )
+        except Exception:
+            logger.exception("background.alert_failed job=%s", job.name)
+
+    def get_failure_counts(self) -> dict[str, int]:
+        """Return a snapshot of consecutive failure counts per job."""
+        return {name: job._consecutive_failures for name, job in self._jobs.items()}
 
 
-# Module-level singleton for convenience.
 background = BackgroundScheduler()

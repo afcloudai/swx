@@ -57,7 +57,9 @@ from swx_core.utils.rate_limit import rate_limit_by_ip
 router = APIRouter(prefix="/auth")
 
 
+@router.post("", response_model=LoginResponse, include_in_schema=False)
 @router.post("/", response_model=LoginResponse)
+@router.post("/login", response_model=LoginResponse)
 @rate_limit_by_ip(max_requests=5, window_seconds=60, action="login")
 async def login(
     session: SessionDep,

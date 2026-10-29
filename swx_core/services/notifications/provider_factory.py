@@ -1,3 +1,15 @@
+"""
+SwX Notification Provider Factory
+-----------------------------------
+Creates and dispatches to email/SMS providers with circuit-breaker
+resilience, retry-with-backoff, and config resolution.
+
+Applications can register custom sender implementations via
+``register_email_sender`` and ``register_sms_sender`` to override
+or extend the built-in providers without reaching into private
+module attributes.
+"""
+
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,11 +23,50 @@ from swx_core.services.llm.resilience import CircuitBreakerRegistry, call_with_t
 from swx_core.services.notifications import provider_cache
 from swx_core.services.notifications.providers import africas_talking_provider, sendgrid_provider, smtp_provider, twilio_provider
 
-_EMAIL_SENDERS = {"smtp": smtp_provider.send_email, "api": sendgrid_provider.send_email, "sendgrid": sendgrid_provider.send_email, "resend": sendgrid_provider.send_email}
-_SMS_SENDERS = {"twilio": twilio_provider.send_sms, "africas_talking": africas_talking_provider.send_sms}
+_EMAIL_SENDERS: dict[str, Any] = {
+    "smtp": smtp_provider.send_email,
+    "api": sendgrid_provider.send_email,
+    "sendgrid": sendgrid_provider.send_email,
+    "resend": sendgrid_provider.send_email,
+}
+
+_SMS_SENDERS: dict[str, Any] = {
+    "twilio": twilio_provider.send_sms,
+    "africas_talking": africas_talking_provider.send_sms,
+}
 
 _SECRET_FIELDS_EMAIL = {"password", "api_key"}
 _SECRET_FIELDS_SMS = {"auth_token", "api_key"}
+
+
+# ---------------------------------------------------------------------------
+# Public API: sender registration
+# ---------------------------------------------------------------------------
+
+
+def register_email_sender(provider_type: str, sender: Any) -> None:
+    """Register or override an email sender implementation.
+
+    Args:
+        provider_type: Provider key (e.g. ``"smtp"``, ``"sendgrid"``).
+            Must match the ``provider_type`` field in
+            ``EmailProviderConfig`` database rows.
+        sender: Async callable with signature
+            ``async def sender(config: dict, notification: dict) -> dict``.
+            The return dict should include at least ``{"provider": ..., "accepted": bool}``.
+    """
+    _EMAIL_SENDERS[provider_type] = sender
+
+
+def register_sms_sender(provider_type: str, sender: Any) -> None:
+    """Register or override an SMS sender implementation.
+
+    Args:
+        provider_type: Provider key (e.g. ``"twilio"``).
+        sender: Async callable with signature
+            ``async def sender(config: dict, notification: dict) -> dict``.
+    """
+    _SMS_SENDERS[provider_type] = sender
 
 
 def _decrypt_field(value: str | None) -> str | None:

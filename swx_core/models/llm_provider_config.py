@@ -20,6 +20,9 @@ class LLMProviderType(str, Enum):
     AZURE = "azure"
     OLLAMA = "ollama"
     ANTHROPIC = "anthropic"
+    VLLM = "vllm"
+    SGLANG = "sglang"
+    LLAMACPP = "llamacpp"
 
 
 class CredentialSource(str, Enum):
@@ -190,6 +193,54 @@ LLM_PROVIDER_DEFAULTS: list[dict[str, Any]] = [
         "is_primary": False,
         "is_active": True,
         "supported_phases": ["chat", "triage", "analysis"],
+        "cost_per_1k_tokens": 0.0,
+        "timeout_seconds": 120,
+        "max_retries": 1,
+        "circuit_breaker_threshold": 3,
+        "circuit_breaker_reset_seconds": 60,
+    },
+    {
+        "provider": LLMProviderType.VLLM.value,
+        "name": "vLLM Server",
+        "model_name": "${VLLM_MODEL_NAME:-meta-llama/Meta-Llama-3.1-8B-Instruct}",
+        "credentials": {"base_url": "${VLLM_HOST:-http://localhost:8000}", "api_key": "${VLLM_API_KEY:-}"},
+        "default_params": {"temperature": 0.2, "max_tokens": 2048, "top_p": 1.0},
+        "priority": 110,
+        "is_primary": False,
+        "is_active": False,
+        "supported_phases": ["chat", "triage", "analysis"],
+        "cost_per_1k_tokens": 0.0,
+        "timeout_seconds": 90,
+        "max_retries": 2,
+        "circuit_breaker_threshold": 5,
+        "circuit_breaker_reset_seconds": 30,
+    },
+    {
+        "provider": LLMProviderType.SGLANG.value,
+        "name": "SGLang Server",
+        "model_name": "${SGLANG_MODEL_NAME:-meta-llama/Meta-Llama-3.1-8B-Instruct}",
+        "credentials": {"base_url": "${SGLANG_HOST:-http://localhost:30000}", "api_key": "${SGLANG_API_KEY:-}"},
+        "default_params": {"temperature": 0.2, "max_tokens": 2048, "top_p": 1.0},
+        "priority": 120,
+        "is_primary": False,
+        "is_active": False,
+        "supported_phases": ["chat", "triage", "analysis"],
+        "cost_per_1k_tokens": 0.0,
+        "timeout_seconds": 90,
+        "max_retries": 2,
+        "circuit_breaker_threshold": 5,
+        "circuit_breaker_reset_seconds": 30,
+    },
+    {
+        "provider": LLMProviderType.LLAMACPP.value,
+        "name": "llama.cpp Server",
+        "model_name": "${LLAMACPP_MODEL_ALIAS:-default}",
+        "credentials": {"base_url": "${LLAMACPP_HOST:-http://localhost:8080}"},
+        "default_params": {"temperature": 0.2, "max_tokens": 2048, "top_p": 1.0},
+        "priority": 130,
+        "is_primary": False,
+        "is_active": False,
+        "supported_phases": ["chat"],
         "cost_per_1k_tokens": 0.0,
         "timeout_seconds": 120,
         "max_retries": 1,

@@ -443,7 +443,13 @@ Operational requirements:
 - Key prefixing to avoid collisions (`swx:sess:*`)
 - Redis HA (Sentinel or managed)
 
-If you rely on Starlette `SessionMiddleware`, ensure cookies are HTTPS-only in production (code change required; current default is `https_only=False`).
+If you rely on Starlette `SessionMiddleware`, configure it via settings — no code changes needed:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SESSION_MAX_AGE` | `86400` | Session cookie lifetime in seconds |
+| `SESSION_SAME_SITE` | `lax` | SameSite policy (`lax`, `strict`, `none`) |
+| `HTTPS_ONLY` | derived | `Secure` cookie flag; defaults to `true` in production/staging, `false` locally. Set explicitly to override. |
 
 ### Database Connection Pooling
 

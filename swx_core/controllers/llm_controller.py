@@ -3,7 +3,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swx_core.contracts.llm import SSEEvent, ValidateProviderResult
+from swx_core.contracts.llm import SSEEvent, ValidateProviderResult, ProviderHealthStatus
 from swx_core.models.llm_provider_config import LLMProviderConfigCreate, LLMProviderConfigPublic, LLMProviderConfigUpdate
 from swx_core.services.llm import llm_service
 
@@ -39,6 +39,10 @@ async def stream_controller(session: AsyncSession, prompt: str, phase: str, syst
 
 async def health_controller(session: AsyncSession) -> dict[str, bool]:
     return await llm_service.health_check_all(session)
+
+
+async def health_detailed_controller(session: AsyncSession) -> list[dict[str, object]]:
+    return await llm_service.health_check_detailed(session)
 
 
 async def usage_controller(session: AsyncSession, account_id: UUID, skip: int = 0, limit: int = 100) -> dict[str, Any]:

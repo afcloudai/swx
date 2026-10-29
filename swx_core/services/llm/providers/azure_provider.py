@@ -9,7 +9,7 @@ try:
 except ImportError:
     AsyncAzureOpenAI = None  # type: ignore[assignment]
 
-from swx_core.contracts.llm import LLMRequest, LLMResponse, SSEEvent, ValidateProviderResult
+from swx_core.contracts.llm import LLMRequest, LLMResponse, ProviderHealthStatus, SSEEvent, ValidateProviderResult
 from swx_core.services.llm.providers import BaseLLMProvider
 
 
@@ -78,6 +78,17 @@ class AzureProvider(BaseLLMProvider):
             return True
         except Exception:
             return False
+
+    async def health(self) -> ProviderHealthStatus:
+        from time import monotonic
+        started = monotonic()
+        try:
+            await self.client.models.list()
+            latency_ms = (monotonic() - started) * 1000
+            return ProviderHealthStatus(healthy=True, latency_ms=round(latency_ms, 2), model_loaded=True)
+        except Exception as exc:
+            latency_ms = (monotonic() - started) * 1000
+            return ProviderHealthStatus(healthy=False, latency_ms=round(latency_ms, 2), model_loaded=False, error=str(exc))
 
     async def validate_api_key(self) -> ValidateProviderResult:
         try:

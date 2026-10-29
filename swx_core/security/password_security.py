@@ -87,8 +87,9 @@ async def generate_password_reset_token(
 
     expires_delta = await get_token_expiration(session, "password_reset")
 
-    # Create token with explicit audience and separate secret key
-    # Note: Using "user" audience but with separate secret to prevent confusion
+    # Create token with explicit audience and separate secret key.
+    # The jti claim (added by create_token) makes this token addressable
+    # by the token blacklist, so outstanding reset links are revocable.
     return create_token(
         subject=email,
         audience=TokenAudience.USER,  # Password reset is for user domain
@@ -98,15 +99,19 @@ async def generate_password_reset_token(
     )
 
 
-def verify_password_reset_token(token: str) -> str | None:
+async def verify_password_reset_token(token: str, check_blacklist: bool = True) -> str | None:
     """
     Verify and decode a password reset token.
 
     This function validates the token using the separate password reset secret key
-    and ensures it has the correct audience.
+    and ensures it has the correct audience. When the token carries a ``jti``,
+    it is additionally checked against the token blacklist so revoked reset
+    links are rejected.
 
     Args:
         token (str): The JWT reset token.
+        check_blacklist (bool): Consult the revocation registry (default True).
+            Leave enabled in request paths; disable only for offline tooling.
 
     Returns:
         str | None: The email associated with the reset token if valid, otherwise None.
@@ -121,8 +126,23 @@ def verify_password_reset_token(token: str) -> str | None:
             secret_key=settings.PASSWORD_RESET_SECRET_KEY,
         )
 
-        # Return the email stored in the token
-        return str(decoded_token["sub"])
-
     except (ExpiredSignatureError, InvalidTokenError, jwt.InvalidAudienceError):
         return None  # Invalid or expired token
+
+    if check_blacklist and await _reset_token_revoked(token, decoded_token):
+        return None
+
+    # Return the email stored in the token
+    return str(decoded_token["sub"])
+
+
+async def _reset_token_revoked(token: str, decoded_token: dict) -> bool:
+    """Check reset-token revocation via jti or fallback user-level entries."""
+    from swx_core.security.password_reset_registry import is_reset_token_revoked
+
+    try:
+        return await is_reset_token_revoked(token, decoded_token)
+    except Exception:
+        # Fail closed on registry outages: an unverifiable revocation state
+        # must not grant a password change.
+        return True

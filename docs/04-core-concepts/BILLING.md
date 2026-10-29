@@ -1,7 +1,7 @@
 # Billing & Entitlements
 
-**Version:** 2.20.0  
-**Last Updated:** 2026-08-11
+**Version:** 2.28.0  
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -766,6 +766,77 @@ QUOTA_WINDOW_DEFAULT_TOKENS=100000
 QUOTA_MONTHLY_DEFAULT_TOKENS=1000000
 QUOTA_WINDOW_MAX_RESETS=1
 QUOTA_DAILY_MAX_RESETS=3
+```
+
+### Weekly Usage Windows (Hard Reset)
+
+**WeeklyWindowService** (`swx_core/services/billing/usage_window_service.py`) provides a weekly hard-reset window complementary to the rolling 5-hour window. Usage resets to zero on a fixed day (subscription anniversary) rather than rolling.
+
+```python
+from swx_core.services.billing.usage_window_service import get_weekly_window_service
+
+weekly_svc = get_weekly_window_service()
+
+# Get current weekly usage
+status = await weekly_svc.get_weekly_usage(account_id, "ai.tokens_per_week")
+# => WeeklyUsageStatus(weekly_quota=5_000_000, weekly_used=1_200_000, weekly_remaining=3_800_000, ...)
+
+# Record token usage against the weekly window
+await weekly_svc.record_weekly_usage(account_id, "ai.tokens_per_week", tokens=500)
+
+# Check if weekly limit has been reached
+allowed = await weekly_svc.check_weekly_limit(account_id, plan_key, "ai.tokens_per_week")
+
+# Manually reset weekly usage (e.g., on subscription anniversary)
+status = await weekly_svc.reset_weekly_usage(account_id, "ai.tokens_per_week")
+```
+
+**Settings:**
+```env
+QUOTA_WEEKLY_ENABLED=true
+QUOTA_WEEKLY_DEFAULT_TOKENS=5000000
+QUOTA_WEEKLY_TTL_DAYS=8
+```
+
+**Key:** `quota:{account_id}:weekly:{feature_key}:{period_start_ts}`
+
+### Compute Unit Service
+
+**ComputeUnitService** (`swx_core/services/billing/compute_unit_service.py`) converts raw token counts to compute units using configurable model multipliers. Different models consume different GPU time per token, so raw token counts mislead billing.
+
+```python
+from swx_core.services.billing.compute_unit_service import get_compute_unit_service
+
+cu_svc = get_compute_unit_service()
+
+# Calculate compute units for a request
+result = cu_svc.calculate_cus(model_key="gpt-4o", input_tokens=1000, output_tokens=500)
+# => ComputeUnitResult(compute_units=7500.0, input_tokens=1000, output_tokens=500,
+#     model_key='gpt-4o', level='LEVEL_2', input_multiplier=2500.0, output_multiplier=10000.0)
+
+# Register a custom multiplier
+from swx_core.services.billing.compute_unit_service import ModelMultiplier
+cu_svc.register_multiplier(ModelMultiplier(
+    model_key="my-custom-model",
+    level="LEVEL_3",
+    input_multiplier=2.0,
+    output_multiplier=2.0,
+))
+```
+
+**Levels** (configurable via `COMPUTE_UNIT_LEVELS`):
+
+| Level | Label | Input Multiplier | Output Multiplier |
+|-------|-------|-----------------:|------------------:|
+| LEVEL_1 | Light | 0.5 | 0.5 |
+| LEVEL_2 | Standard | 1.0 | 1.0 |
+| LEVEL_3 | Heavy | 2.0 | 2.0 |
+| LEVEL_4 | Premium | 5.0 | 5.0 |
+
+**Settings:**
+```env
+COMPUTE_UNIT_DEFAULT_LEVEL=LEVEL_2
+COMPUTE_UNIT_DECIMALS=0
 ```
 
 ### Webhook Handlers

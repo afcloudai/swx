@@ -1,6 +1,6 @@
 # LLM Provider Service
-**Version:** 2.0.0  
-**Last Updated:** 2026-08-03
+**Version:** 2.28.0  
+**Last Updated:** 2026-09-10
 ---
 ## Table of Contents
 1. [Overview](#overview)
@@ -11,12 +11,14 @@
 6. [Provider Catalog](#provider-catalog)
 7. [Resilience Layer](#resilience-layer)
 8. [Fallback Chain](#fallback-chain)
-9. [API Endpoints](#api-endpoints)
-10. [Configuration](#configuration)
-11. [Default Providers](#default-providers)
-12. [Events](#events)
-13. [Usage Examples](#usage-examples)
-14. [Adding Custom Providers](#adding-custom-providers)
+9. [Health Checks](#health-checks)
+10. [API Endpoints](#api-endpoints)
+11. [Configuration](#configuration)
+12. [Default Providers](#default-providers)
+13. [Self-Hosted Providers](#self-hosted-providers)
+14. [Events](#events)
+15. [Usage Examples](#usage-examples)
+16. [Adding Custom Providers](#adding-custom-providers)
 ---
 ## Overview
 The LLM Provider Service gives SwX-Core a database-driven way to call large language models through one service layer. It exists so applications can route requests across multiple providers, fall back when one fails, track usage cost and latency, and apply resilience controls without hardcoding one SDK into feature code.
@@ -71,7 +73,7 @@ Provider Call -> CircuitBreaker -> retry_with_backoff -> call_with_timeout
 | `account_id` | UUID, nullable | User or account associated with the request |
 | `created_at` | datetime | Creation timestamp |
 ### `LLMProviderType`
-`swx_core/models/llm_provider_config.py` defines four provider enum values: `openai`, `azure`, `ollama`, and `anthropic`.
+`swx_core/models/llm_provider_config.py` defines seven provider enum values: `openai`, `azure`, `ollama`, `anthropic`, `vllm`, `sglang`, and `llamacpp`. The three self-hosted types (`vllm`, `sglang`, `llamacpp`) use the OpenAI-compatible wire protocol and expose GPU/VRAM health metrics through their native health endpoints.
 ---
 ## Credential Resolution
 Credential resolution lives in `swx_core/services/llm/config_resolver.py`.
@@ -184,6 +186,35 @@ async for event in chain.stream(session, LLMRequest(prompt="Hello"), phase="chat
 
 See [Fallback Chain](FALLBACK_CHAIN.md) for full documentation.
 ---
+## Health Checks
+### Boolean Health Check
+The existing `health_check()` method on every provider returns a simple `bool`. The `/admin/llm/health` endpoint calls this across all providers.
+
+### Structured Health Check (v2.27+)
+Each provider now implements `health() -> ProviderHealthStatus` returning rich diagnostics:
+
+```python
+class ProviderHealthStatus(BaseModel):
+    healthy: bool
+    latency_ms: float | None = None
+    model_loaded: bool | None = None
+    gpu_utilization: float | None = None
+    vram_used_gb: float | None = None
+    vram_total_gb: float | None = None
+    error: str | None = None
+```
+
+| Provider | `model_loaded` | `gpu_utilization` | `vram_used_gb` / `vram_total_gb` |
+|---|---|---|---|
+| OpenAI / Azure | ✅ via `/models` | ❌ | ❌ |
+| Anthropic | ✅ via minimal completion | ❌ | ❌ |
+| Ollama | ✅ via `/api/tags` | ✅ via `/api/ps` | ✅ via `/api/ps` |
+| vLLM | ✅ via `/v1/models` | ✅ via `/v1/health` | ✅ via `/v1/health` |
+| SGLang | ✅ via `/v1/models` | ✅ via `/health` | ✅ via `/health` |
+| llama.cpp | ✅ via `/health` | ⚠️ partial | ⚠️ via `/health` |
+
+The `/admin/llm/health/detailed` endpoint returns a list of per-provider status objects with all fields.
+---
 ## API Endpoints
 ### Admin Endpoints
 All admin routes require `get_current_admin_user` and live under `/admin/llm`.
@@ -195,7 +226,8 @@ All admin routes require `get_current_admin_user` and live under `/admin/llm`.
 | `PUT` | `/admin/llm/providers/{config_id}` | Update a provider config |
 | `DELETE` | `/admin/llm/providers/{config_id}` | Delete a provider config |
 | `POST` | `/admin/llm/generate` | Test generation with prompt, phase, options, and optional `account_id` |
-| `GET` | `/admin/llm/health` | Run `health_check()` across all configured providers |
+| `GET` | `/admin/llm/health` | Run `health_check()` across all configured providers (boolean) |
+| `GET` | `/admin/llm/health/detailed` | Run `health()` across all providers, returns `ProviderHealthStatus` with GPU/VRAM metrics |
 | `GET` | `/admin/llm/usage/{account_id}` | Get usage summary and logs for an account |
 ### User Endpoints
 | Method | Path | Description |
@@ -221,13 +253,37 @@ LLM_USAGE_LOG_ENABLED: bool = Field(default=True)
 - **`LLM_USAGE_LOG_ENABLED`**: persists cost, latency, and token logs when enabled
 ---
 ## Default Providers
-`LLM_PROVIDER_DEFAULTS` defines four starter configs.
+`LLM_PROVIDER_DEFAULTS` defines seven starter configs.
 | Provider | Model | Priority | Env vars | Active | Primary |
 |---|---|---:|---|---|---|
 | OpenAI | `gpt-4o` | 10 | `OPENAI_API_KEY`, `OPENAI_ORGANIZATION` | Yes | Yes |
 | Azure OpenAI | `gpt-4o` | 20 | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` | No | No |
 | Anthropic | `claude-3-5-sonnet-latest` | 30 | `ANTHROPIC_API_KEY` | No | No |
 | Ollama Local | `llama3.2` | 100 | `OLLAMA_HOST` | Yes | No |
+| vLLM | `meta-llama/Meta-Llama-3.1-8B-Instruct` | 110 | `VLLM_HOST`, `VLLM_API_KEY`, `VLLM_MODEL_NAME` | No | No |
+| SGLang | `meta-llama/Meta-Llama-3.1-8B-Instruct` | 120 | `SGLANG_HOST`, `SGLANG_API_KEY`, `SGLANG_MODEL_NAME` | No | No |
+| llama.cpp | `default` | 130 | `LLAMACPP_HOST`, `LLAMACPP_MODEL_ALIAS` | No | No |
+---
+## Self-Hosted Providers
+vLLM, SGLang, and llama.cpp all expose OpenAI-compatible endpoints but are first-class provider types for health checking, metrics, and configuration.
+
+### vLLM (`LLMProviderType.VLLM`)
+- Uses `/v1/chat/completions` for generation and streaming
+- Uses `/v1/models` for validation and model listing
+- Uses `/v1/health` for GPU/VRAM metrics when available
+- Credentials: `base_url`, `api_key` (optional)
+
+### SGLang (`LLMProviderType.SGLANG`)
+- Uses `/v1/chat/completions` for generation and streaming
+- Uses `/v1/models` for validation and model listing
+- Uses `/health` for GPU utilization and memory stats when available
+- Credentials: `base_url`, `api_key` (optional)
+
+### llama.cpp (`LLMProviderType.LLAMACPP`)
+- Uses `/v1/chat/completions` for generation and streaming
+- Uses `/health` for health checks and VRAM stats
+- No API key required; single model per server instance
+- Credentials: `base_url` only
 ---
 ## Events
 The service dispatches events through `swx_core.events.event_bus`.
@@ -276,9 +332,10 @@ curl -X POST http://localhost:8001/admin/llm/providers \
 ## Adding Custom Providers
 1. Create a class that extends `BaseLLMProvider` from `swx_core/services/llm/providers/__init__.py`
 2. Implement `generate(request: LLMRequest)`, `stream(request: LLMRequest)`, and `health_check()`
-3. Accept a `provider_config` dict in the constructor so `model_name` and default params can be passed through
-4. Import the class in `swx_core/services/llm/provider_factory.py`
-5. Add a new branch in `create_provider()` that maps the stored `provider` value to your implementation
+3. Optionally override `health() -> ProviderHealthStatus` to return GPU/VRAM metrics instead of the default boolean wrapper
+4. Accept a `provider_config` dict in the constructor so `model_name` and default params can be passed through
+5. Import the class in `swx_core/services/llm/provider_factory.py`
+6. Add a new branch in `create_provider()` that maps the stored `provider` value to your implementation
 The factory is the registration point. If `create_provider()` does not know your provider type, it will never enter the provider chain.
 ---
 **Status:** LLM provider service documented, ready for use.

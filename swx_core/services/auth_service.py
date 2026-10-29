@@ -745,7 +745,7 @@ async def reset_password_service(
             status_code=400, detail=translate(request, "invalid_or_expired_reset_token")
         )
 
-    email = verify_password_reset_token(token)
+    email = await verify_password_reset_token(token)
     if not email:
         raise HTTPException(
             status_code=400, detail=translate(request, "invalid_or_expired_reset_token")
@@ -764,6 +764,11 @@ async def reset_password_service(
     existing_user.hashed_password = await get_password_hash(new_password)
     await update_password_hash(session, existing_user, existing_user.hashed_password)
     await revoke_all_tokens(session, email)
+
+    # Security invariant: after a successful reset, every outstanding reset link is dead.
+    from swx_core.security.password_reset_registry import revoke_user_reset_tokens
+    await revoke_user_reset_tokens(existing_user.email)
+
     from swx_core.events.dispatcher import event_bus
     await event_bus.dispatch(
         "user.password_reset",

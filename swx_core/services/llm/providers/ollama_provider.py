@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
-from swx_core.contracts.llm import LLMRequest, LLMResponse, SSEEvent, ValidateProviderResult
+from swx_core.contracts.llm import LLMRequest, LLMResponse, ProviderHealthStatus, SSEEvent, ValidateProviderResult
 from swx_core.services.llm.providers import BaseLLMProvider
 
 
@@ -86,6 +86,59 @@ class OllamaProvider(BaseLLMProvider):
             return response.is_success
         except Exception:
             return False
+
+    async def health(self) -> ProviderHealthStatus:
+        """Enriched health check with GPU/VRAM stats from /api/ps (Ollama >= 0.1.26)."""
+        from time import monotonic
+        started = monotonic()
+        try:
+            tags_response = await self.client.get("/api/tags")
+            latency_ms = (monotonic() - started) * 1000
+            if not tags_response.is_success:
+                return ProviderHealthStatus(
+                    healthy=False,
+                    latency_ms=round(latency_ms, 2),
+                    model_loaded=False,
+                    error=f"Ollama returned status {tags_response.status_code}",
+                )
+
+            model_loaded = True
+            vram_used_gb: float | None = None
+            vram_total_gb: float | None = None
+            gpu_utilization: float | None = None
+
+            try:
+                ps_response = await self.client.get("/api/ps")
+                if ps_response.is_success:
+                    ps_data = ps_response.json()
+                    models_running = ps_data.get("models", [])
+                    if models_running:
+                        vram_used_gb = sum(
+                            float(m.get("size", 0)) for m in models_running
+                        ) / (1024 ** 3)
+                    gpu_utilization = ps_data.get("gpu_utilization")
+                    vram_info = ps_data.get("vram")
+                    if isinstance(vram_info, dict):
+                        vram_total_gb = float(vram_info.get("total", 0)) / (1024 ** 3) if "total" in vram_info else None
+            except Exception:
+                pass
+
+            return ProviderHealthStatus(
+                healthy=True,
+                latency_ms=round(latency_ms, 2),
+                model_loaded=model_loaded,
+                gpu_utilization=gpu_utilization,
+                vram_used_gb=vram_used_gb,
+                vram_total_gb=vram_total_gb,
+            )
+        except Exception as exc:
+            latency_ms = (monotonic() - started) * 1000
+            return ProviderHealthStatus(
+                healthy=False,
+                latency_ms=round(latency_ms, 2),
+                model_loaded=False,
+                error=str(exc),
+            )
 
     async def validate_api_key(self) -> ValidateProviderResult:
         try:

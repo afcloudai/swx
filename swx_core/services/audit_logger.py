@@ -55,6 +55,26 @@ class AuditAction(str, Enum):
     AUTH_ACCOUNT_UNLOCKED = "auth.account_unlocked"
     AUTH_PASSWORD_RESET_RATE_LIMITED = "auth.password_reset_rate_limited"
 
+    # OIDC identity-provider events (SWX-IDM-001)
+    AUTH_OAUTH_CLIENT_CREATED = "auth.oauth_client_created"
+    AUTH_OAUTH_CLIENT_UPDATED = "auth.oauth_client_updated"
+    AUTH_OAUTH_CLIENT_DELETED = "auth.oauth_client_deleted"
+    AUTH_CONSENT_GRANTED = "auth.consent_granted"
+    AUTH_CONSENT_REVOKED = "auth.consent_revoked"
+    AUTH_TOKEN_ISSUED = "auth.token_issued"
+    AUTH_TOKEN_REVOKED = "auth.token_revoked"
+    AUTH_TOKEN_FAMILY_REVOKED = "auth.token_family_revoked"
+    AUTH_OAUTH_KEY_ROTATED = "auth.oauth_key_rotated"
+    AUTH_OIDC_AUTHORIZE_DENIED = "auth.oidc_authorize_denied"
+    AUTH_OIDC_TOKEN_DENIED = "auth.oidc_token_denied"
+    AUTH_PHONE_VERIFICATION_REQUESTED = "auth.phone_verification_requested"
+    AUTH_PHONE_VERIFICATION_CONFIRMED = "auth.phone_verification_confirmed"
+    AUTH_IDENTITY_LINKED = "auth.identity_linked"
+    AUTH_IDENTITY_VERIFICATION_REQUESTED = "auth.identity_verification_requested"
+    AUTH_IDENTITY_VERIFICATION_CONFIRMED = "auth.identity_verification_confirmed"
+    AUTH_PHONE_RECOVERY_REQUESTED = "auth.phone_recovery_requested"
+    AUTH_PHONE_RECOVERY_COMPLETED = "auth.phone_recovery_completed"
+
     # RBAC events
     RBAC_ROLE_ASSIGNED = "rbac.role_assigned"
     RBAC_ROLE_REMOVED = "rbac.role_removed"
@@ -198,9 +218,15 @@ class AuditLogger:
             await enqueue_siem_event(action, safe_context)
 
         except Exception as e:
-            # Audit logging should not crash the main request flow, but it must be logged.
+            # Audit logging must never crash the request flow. Containment is
+            # two-level: the failed entry is dropped AND even the rollback is
+            # guarded — an unusable audit session (connection loss, tests) must
+            # not mask the refusal/issuance result the caller is returning.
             logger.error(f"Failed to record audit log: {e}", exc_info=True)
-            await self.session.rollback()
+            try:
+                await self.session.rollback()
+            except Exception:
+                logger.critical("Audit-log rollback also failed; leaving session disposal to the caller.")
 
     def _filter_sensitive_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

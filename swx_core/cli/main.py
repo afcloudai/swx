@@ -100,6 +100,10 @@ main.add_command(init_project, "init")
 # Security
 main.add_command(security, "security")
 
+# OIDC identity provider (SWX-IDM-001)
+from swx_core.cli.commands.idp import idp
+main.add_command(idp, "idp")
+
 # AI-Aware Layer commands
 register_ai_commands(main)
 

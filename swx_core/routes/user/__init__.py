@@ -10,10 +10,13 @@ from .conversation_route import router as conversation_router
 from .data_transfer_route import router as data_transfer_router
 from .feature_flag_route import router as feature_flag_router
 from .gdpr_route import router as gdpr_router
+from .identity_verification_route import router as identity_verification_router
 from .llm_route import router as llm_router
 from .mfa_route import router as mfa_router
 from .notification_route import router as notification_router
+from .oidc_consent_route import router as oidc_consent_router
 from .organization_route import router as organization_router
+from .phone_verification_route import router as phone_verification_router
 from .referral_route import router as referral_router
 from .safety_route import router as safety_router
 from .session_route import router as session_router
@@ -27,9 +30,11 @@ router.include_router(account_linking_router)
 router.include_router(billing_router)
 router.include_router(consent_router)
 router.include_router(gdpr_router)
+router.include_router(identity_verification_router)
 router.include_router(llm_router)
 router.include_router(mfa_router)
 router.include_router(notification_router)
+router.include_router(oidc_consent_router)
 router.include_router(organization_router)
 router.include_router(user_router)
 router.include_router(api_key_router)
@@ -42,3 +47,4 @@ router.include_router(status_router)
 router.include_router(data_transfer_router)
 router.include_router(feature_flag_router)
 router.include_router(referral_router)
+router.include_router(phone_verification_router)

@@ -276,6 +276,22 @@ async def list_users():
     ...
 ```
 
+**Fail-closed variant (no superuser bypass) — preferred for security-sensitive surfaces:**
+```python
+from swx_core.rbac.dependencies import require_permission_strict
+
+@router.delete("/users/{user_id}", dependencies=[Depends(require_permission_strict("user:delete"))])
+async def delete_user(user_id: UUID):
+    """Even superusers must hold 'user:delete' explicitly."""
+    ...
+```
+
+`require_permission` grants superusers every permission (migration-compatibility
+bypass — discouraged on hard security boundaries). `require_permission_strict`
+has no bypass: an empty/missing permission set denies, superuser status is
+ignored. Use the strict variant for admin, billing, PII, and destructive
+operations.
+
 **Require team-scoped permission:**
 ```python
 @router.get("/teams/{team_id}/members", 
@@ -571,6 +587,15 @@ async def has_permission(
    
    # ❌ Bad
    @router.get("/users", dependencies=[Depends(require_role("admin"))])
+   ```
+
+2. **Use the strict variant on security boundaries**
+   ```python
+   # ✅ Good — no implicit superuser bypass
+   @router.delete("/users/{id}", dependencies=[Depends(require_permission_strict("user:delete"))])
+   
+   # ⚠️ Discouraged on hard boundaries — superusers bypass implicitly
+   @router.delete("/users/{id}", dependencies=[Depends(require_permission("user:delete"))])
    ```
 
 2. **Follow naming convention**

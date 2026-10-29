@@ -498,38 +498,68 @@ async def provider_auth_callback(request: Request, session: SessionDep, provider
                 user_info = response.json()
 
         email = user_info.get("email")
-        if not email:
-            return error_redirect("missing_email")
+        idp_subject = (
+            user_info.get("sub") or    # Google, OpenID
+            user_info.get("id") or     # Facebook, GitHub
+            user_info.get("user_id")   # Custom providers
+        )
 
-        existing_user = await get_user_by_email(session=session, email=email)
-        is_new_user = existing_user is None
-        if is_new_user:
-            # Extract provider ID from user info (provider-specific field)
-            provider_id = (
-                user_info.get("sub") or  # Google, OpenID
-                user_info.get("id") or    # Facebook, GitHub
-                user_info.get("user_id")  # Custom providers
-            )
-            if not provider_id:
-                return error_redirect("missing_provider_id")
+        existing_user = None
+        is_new_user = False
 
-            # Create user with proper event emission
-            user_in = UserCreate(
-                email=email,
-                password=secrets.token_urlsafe(28),  # Random placeholder, unused for social auth
+        # Linked identities login directly via their IdP subject (email optional)
+        if idp_subject:
+            from ...auth.oidc_provider import resolve_user_by_idp_sub
+
+            existing_user = await resolve_user_by_idp_sub(session, str(idp_subject), provider)
+            is_new_user = existing_user is None
+
+        if existing_user is None and email:
+            existing_user = await get_user_by_email(session=session, email=email)
+            is_new_user = existing_user is None
+            if is_new_user:
+                if not idp_subject:
+                    return error_redirect("missing_provider_id")
+
+                # Create user with proper event emission
+                user_in = UserCreate(
+                    email=email,
+                    password=secrets.token_urlsafe(28),  # Random placeholder, unused for social auth
+                    full_name=user_info.get("name"),
+                )
+
+                existing_user = await register_user_service(
+                    session=session,
+                    user_in=user_in,
+                    request=request,
+                    auth_provider=provider,
+                    provider_id=str(idp_subject),
+                    event_context={"social_provider": provider},
+                    pre_register_hook=registration_hooks.pre_register,
+                    post_register_hook=registration_hooks.post_register,
+                )
+
+        if existing_user is None:
+            # No email and no linked subject: phone-VERIFIED IdP claims still
+            # provision the identity (email-less, phone-first norm) — otherwise dead-end.
+            if not (idp_subject and user_info.get("phone_verified") and user_info.get("phone")):
+                return error_redirect("missing_email")
+
+            from ...auth.oidc_provider import provision_federated_identity
+
+            existing_user = await provision_federated_identity(
+                session,
+                idp=provider,
+                idp_sub=str(idp_subject),
+                phone=str(user_info["phone"]),
                 full_name=user_info.get("name"),
             )
+            is_new_user = True
 
-            existing_user = await register_user_service(
-                session=session,
-                user_in=user_in,
-                request=request,
-                auth_provider=provider,
-                provider_id=provider_id,
-                event_context={"social_provider": provider},
-                pre_register_hook=registration_hooks.pre_register,
-                post_register_hook=registration_hooks.post_register,
-            )
+        if not existing_user.email:
+            # Phone-only persona: the identity exists and links by verified
+            # phone; platform session tokens are email-subject (D-10 migration).
+            return error_redirect("phone_only_login_pending")
 
         response = await complete_oauth_login(session, existing_user.email, provider, is_new_user, request)
         clear_oauth_session(request)

@@ -58,11 +58,46 @@ Validates JWT tokens from the `Authorization: Bearer <token>` header.
 
 ## API Key Guard
 
-Validates API keys from the `X-Api-Key` header.
+Validates API keys from the `X-API-Key` header (header-only by default).
 
 - Looks up the key hash in the database
+- **Loads the key's scopes** (`swx_api_key_scope`) and maps them onto
+  `AuthenticatedUser.permissions` as `resource:action` strings, so route-level
+  permission checks are enforced for API-key principals. A key with no scopes
+  can only reach endpoints that require no permission/scope.
+- Records the key's environment (`test` / `live`) in `metadata["key_environment"]`
 - Returns `AuthenticatedUser` with API key owner details
 - Raises `HTTPException(401)` on missing or invalid keys
+
+Query-parameter authentication (`?api_key=...`) is **disabled by default**
+because URL-carried credentials leak into access logs, proxies, browser
+history, and referrer headers. Opt in explicitly if a legacy client needs it:
+
+```python
+API_KEY_QUERY_PARAM=api_key  # env — enables ?api_key= as fallback transport
+```
+
+### Enforcing Scopes
+
+Use `require_scope` / `require_any_scope` on API-key endpoints:
+
+```python
+from swx_core.guards.scopes import require_scope, require_any_scope
+
+@router.get("/billing/invoices", dependencies=[Depends(require_scope("billing:read"))])
+async def list_invoices():
+    ...
+
+# Any-of / all-of variants
+@router.post("/billing/invoices", dependencies=[Depends(require_any_scope("billing:write", "billing:admin"))])
+async def create_invoice():
+    ...
+```
+
+Scope matching is wildcard-aware on the **granted** side: a stored `billing:*`
+scope satisfies a `billing:read` requirement, and `*:read` satisfies any
+resource with `read`. Requirements themselves must be literal
+`resource:action` strings.
 
 ---
 

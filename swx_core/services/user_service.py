@@ -153,6 +153,14 @@ async def update_password_service(
     # Invalidate cached user profile after password change
     await invalidate_user_cache(current_user.id, current_user.email)
 
+    # Outstanding password-reset links must die with the credential change.
+    from swx_core.security.password_reset_registry import revoke_user_reset_tokens
+    await revoke_user_reset_tokens(current_user.email)
+
+    # Refresh/session revocation on explicit password change.
+    from swx_core.security.refresh_token_service import revoke_all_tokens
+    await revoke_all_tokens(session, current_user.email)
+
     await event_bus.emit(Event(
         name="user.password_changed",
         payload={

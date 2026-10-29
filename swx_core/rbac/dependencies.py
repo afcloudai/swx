@@ -14,6 +14,7 @@ from swx_core.database.db import SessionDep
 from swx_core.models.user import User
 from swx_core.rbac.helpers import (
     has_permission,
+    has_permission_strict,
     has_role,
     check_team_permission,
 )
@@ -217,6 +218,53 @@ def require_team_permission(
         return current_user
 
     return team_permission_checker
+
+
+def require_permission_strict(
+    permission: str,
+    team_id: Optional[UUID] = None,
+    domain: Optional[str] = None,
+):
+    """Factory for a fail-closed permission dependency — no superuser bypass.
+
+    Use on security-sensitive surfaces (admin, billing, PII, destructive
+    actions) where an implicit superuser bypass is a liability.
+
+    Example:
+        ```python
+        @router.delete("/users/{user_id}", dependencies=[Depends(require_permission_strict("user:delete"))])
+        def delete_user(user_id: UUID):
+            ...
+        ```
+    """
+
+    async def permission_checker(
+        session: SessionDep,
+        current_user: UserDep,
+        request: Request,
+    ) -> User:
+        """Returns the authenticated user if they hold the permission; 403 otherwise."""
+        if not await has_permission_strict(session, current_user, permission, team_id=team_id):
+            await alert_engine.emit(
+                severity=AlertSeverity.WARNING,
+                source=AlertSource.RBAC,
+                event_type="PERMISSION_DENIED",
+                message=f"User {current_user.email} denied permission (strict): {permission}",
+                actor_type=AlertActorType.USER,
+                actor_id=str(current_user.id),
+                resource_type="permission",
+                resource_id=permission,
+                metadata={"path": request.url.path, "team_id": str(team_id) if team_id else None, "strict": True}
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=translate(
+                    request, "user_lacks_required_permission"
+                ) or f"Permission required: {permission}",
+            )
+        return current_user
+
+    return permission_checker
 
 
 # Type aliases for common permission dependencies

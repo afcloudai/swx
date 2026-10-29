@@ -223,8 +223,8 @@ class InfraSettingsMixin(BaseSettings):
         description="CSRF cookie maximum age in seconds",
     )
     CSRF_LOGIN_PATHS: list[str] = Field(
-        default=["/api/auth/login", "/api/auth/social/login"],
-        description="Paths that trigger CSRF cookie creation",
+        default=["/api/auth/login", "/api/auth", "/api/auth/social/login"],
+        description="Paths that trigger CSRF cookie creation (and bypass validation as pre-auth endpoints)",
     )
     CSRF_LOGOUT_PATHS: list[str] = Field(
         default=["/api/auth/logout"],
@@ -297,4 +297,32 @@ class InfraSettingsMixin(BaseSettings):
     EVENT_BRIDGE_CHANNEL_PREFIX: str = Field(
         default="swx:events",
         description="Redis channel prefix for event broadcasting (default: 'swx:events')",
+    )
+
+    # SSE Bridge Configuration (Redis Pub/Sub for cross-worker SSE delivery)
+    SSE_BRIDGE_ENABLED: bool = Field(
+        default=True,
+        description="Enable cross-worker SSE broadcast via Redis Pub/Sub (requires REDIS_ENABLED)",
+    )
+    SSE_BRIDGE_CHANNEL_PREFIX: str = Field(
+        default="swx:sse",
+        description="Redis channel prefix for SSE broadcast (default: 'swx:sse')",
+    )
+
+    # WS Bridge Configuration (Redis Pub/Sub for cross-worker WebSocket delivery)
+    WS_BRIDGE_ENABLED: bool = Field(
+        default=True,
+        description="Enable cross-worker WebSocket message relay via Redis Pub/Sub (requires REDIS_ENABLED)",
+    )
+    WS_BRIDGE_CHANNEL_PREFIX: str = Field(
+        default="swx:ws",
+        description="Redis channel prefix for WebSocket relay (default: 'swx:ws')",
+    )
+
+    # Python Recursion Limit
+    PYTHON_RECURSION_LIMIT: int = Field(
+        default=2000,
+        description="Python recursion limit applied at startup via sys.setrecursionlimit(). "
+        "SQLAlchemy with SQLModel UUID type coercion can exceed the default 1000. "
+        "Recommended: 2000–5000 for production.",
     )

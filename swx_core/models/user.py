@@ -32,7 +32,7 @@ from swx_core.utils.time import utc_now
 
 
 class UserBase(Base):
-    email: EmailStr = Field(unique=True, index=True, max_length=255)
+    email: EmailStr | None = Field(default=None, max_length=255, sa_column=Column(String(255), unique=True, index=True, nullable=True))
     is_active: bool = True
     is_superuser: bool = False
     full_name: Optional[str] = Field(default=None, max_length=255)
@@ -92,6 +92,15 @@ class User(UserBase, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    phone: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        sa_column=Column(String(32), nullable=True, index=True),
+    )
+    phone_verified_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     failed_login_attempts: int = Field(
         default=0,
         sa_column=Column(Integer, nullable=False, server_default=text("0")),
@@ -125,10 +134,11 @@ class UserCreate(SQLModel):
         preferred_language (Optional[str]): Preferred language (default: 'en').
     """
 
-    email: EmailStr = Field(max_length=255)
+    email: EmailStr | None = Field(default=None, max_length=255)
     password: str = Field(min_length=8, max_length=40)
     full_name: Optional[str] = Field(default=None, max_length=255)
     preferred_language: Optional[str] = Field(default="en", max_length=3)
+    phone: Optional[str] = Field(default=None, max_length=32)
     # NOTE: is_superuser is NOT allowed in UserCreate - only admins can create superusers
 
 
@@ -145,6 +155,7 @@ class UserUpdate(SQLModel):
     email: Optional[EmailStr] = Field(default=None, max_length=255)
     password: Optional[str] = Field(default=None, min_length=8, max_length=40)
     preferred_language: Optional[str] = Field(default="en", max_length=3)
+    phone: Optional[str] = Field(default=None, max_length=32)
 
 
 class UserPublic(UserBase):
@@ -165,6 +176,8 @@ class UserPublic(UserBase):
     avatar_url: Optional[str] = None
     preferred_language: str  # pyright: ignore[reportGeneralTypeIssues]
     email_verified_at: Optional[datetime] = None
+    phone: Optional[str] = None
+    phone_verified_at: Optional[datetime] = None
     mfa_enabled: bool = False
     created_at: datetime
     updated_at: datetime
@@ -204,9 +217,10 @@ class UserNewPassword(SQLModel):
     Schema for setting a new password.
 
     Attributes:
-        token (Optional[str]): Reset token.
+        token (Optional[str]): Reset token (JWT, ~300 chars — not a compact
+            opaque token, hence the generous ceiling).
         new_password (Optional[str]): New password (8-40 characters).
     """
 
-    token: Optional[str] = Field(default=None, max_length=255)
+    token: Optional[str] = Field(default=None, max_length=512)
     new_password: Optional[str] = Field(default=None, min_length=8, max_length=40)

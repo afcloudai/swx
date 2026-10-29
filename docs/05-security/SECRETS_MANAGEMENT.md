@@ -44,15 +44,20 @@ SwX-API follows a **strict secrets management policy**: secrets are stored in en
 **Purpose:** Signing and verifying JWT tokens
 
 **Secrets:**
-- `SECRET_KEY` - Primary JWT signing key
-- `REFRESH_SECRET_KEY` - Refresh token signing key (optional)
-- `PASSWORD_RESET_SECRET_KEY` - Password reset token signing key
+- `SECRET_KEY` - Primary JWT signing key (**required outside development**)
+- `REFRESH_SECRET_KEY` - Refresh token signing key (**required outside development**)
+- `PASSWORD_RESET_SECRET_KEY` - Password reset token signing key (**required outside development**)
 
 **Characteristics:**
 - Must be strong (32+ characters, random)
 - Should be different per environment
 - Should be rotated periodically
 - Never shared across environments
+- **Enforced fail-closed:** settings load raises when any of the three is unset in
+  `ENVIRONMENT=staging` or `production`. Silently self-generated per-process keys
+  invalidate every JWT on restart and diverge across workers. Development
+  environments (`local`/`dev`/`test`) keep a random per-process fallback for
+  zero-config boot.
 
 **Usage:**
 ```python

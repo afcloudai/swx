@@ -16,11 +16,12 @@ Key Components:
 - `log_sql_execute()`: Logs executed SQL queries.
 """
 
+import os
 from collections.abc import AsyncGenerator, Generator
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import event, Engine
+from sqlalchemy import event as sa_event, Engine
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool, QueuePool, SingletonThreadPool, StaticPool, AsyncAdaptedQueuePool
@@ -79,10 +80,34 @@ def _build_connect_args() -> dict[str, object]:
 
 _async_engine = None
 _sync_engine = None
+_async_engine_pid = None
+_sync_engine_pid = None
+
+
+def _post_fork_stale() -> bool:
+    """True when the current process forked after the engines were built."""
+    return _async_engine_pid not in (None, os.getpid()) or _sync_engine_pid not in (
+        None,
+        os.getpid(),
+    )
+
+
+def _reset_stale_post_fork_state() -> None:
+    """Drop cached engines built in the parent process (fork-safe lifecycle)."""
+    global _async_engine, _sync_engine, _async_engine_pid, _sync_engine_pid
+    logger.warning("Stale DB engines from parent process discarded after fork (pid %d)", os.getpid())
+    _async_engine = None
+    _sync_engine = None
+    _async_engine_pid = None
+    _sync_engine_pid = None
 
 
 def get_async_engine():
-    global _async_engine
+    global _async_engine, _async_engine_pid
+    if _post_fork_stale():
+        _reset_stale_post_fork_state()
+        AsyncSessionLocal.invalidate()
+        SessionLocal.invalidate()
     if _async_engine is None:
         pool_class = _resolve_pool_class()
         if pool_class is QueuePool:
@@ -103,11 +128,16 @@ def get_async_engine():
             connect_args=_build_connect_args(),
             **pool_kwargs,
         )
+    _async_engine_pid = os.getpid() if _async_engine_pid is None else _async_engine_pid
     return _async_engine
 
 
 def get_engine():
-    global _sync_engine
+    global _sync_engine, _sync_engine_pid
+    if _post_fork_stale():
+        _reset_stale_post_fork_state()
+        AsyncSessionLocal.invalidate()
+        SessionLocal.invalidate()
     if _sync_engine is None:
         pool_class = _resolve_pool_class()
         pool_kwargs: dict[str, object] = {}
@@ -124,22 +154,29 @@ def get_engine():
             connect_args=_build_connect_args(),
             **pool_kwargs,
         )
+    _sync_engine_pid = os.getpid() if _sync_engine_pid is None else _sync_engine_pid
     return _sync_engine
 
 
 def reset_engine():
-    """Dispose existing engines and clear cached references.
+    """Dispose existing engines, clear cached references and sessionmakers.
 
     Call this in test teardown to release connections and allow
-    a fresh engine to be created on the next request.
+    a fresh engine to be created on the next request. Also the
+    documented hook for workers that need their own pool after fork —
+    get_async_engine()/get_engine() additionally self-heal on pid change.
     """
-    global _async_engine, _sync_engine
+    global _async_engine, _sync_engine, _async_engine_pid, _sync_engine_pid
     if _async_engine is not None:
         _async_engine.sync_engine.dispose()
         _async_engine = None
     if _sync_engine is not None:
         _sync_engine.dispose()
         _sync_engine = None
+    _async_engine_pid = None
+    _sync_engine_pid = None
+    AsyncSessionLocal.invalidate()
+    SessionLocal.invalidate()
 
 
 class _LazyAsyncEngine:
@@ -189,16 +226,50 @@ def _build_sync_session_factory():
     )
 
 
-AsyncSessionLocal = _build_async_session_factory()
-SessionLocal = _build_sync_session_factory()
+class _LazySessionFactory:
+    """Callable session source that rebinds after reset_engine()/fork.
+
+    ``AsyncSessionLocal()`` keeps working everywhere: each call builds a
+    session from the *current* sessionmaker, and the sessionmaker itself
+    is rebuilt lazily whenever ``invalidate()`` drops it (reset_engine,
+    post-fork engine recreation).
+    """
+
+    __slots__ = ("_build", "_make")
+
+    def __init__(self, build):
+        self._build = build
+        self._make = None
+
+    def __call__(self):
+        if self._make is None:
+            self._make = self._build()
+        return self._make()
+
+    def invalidate(self) -> None:
+        self._make = None
+
+
+AsyncSessionLocal = _LazySessionFactory(_build_async_session_factory)
+SessionLocal = _LazySessionFactory(_build_sync_session_factory)
+
+
+def _fork_stale_check() -> None:
+    """Recreate engines/sessions when they were built in a parent process."""
+    if _post_fork_stale():
+        _reset_stale_post_fork_state()
+        AsyncSessionLocal.invalidate()
+        SessionLocal.invalidate()
 
 
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+    _fork_stale_check()
     async with AsyncSessionLocal() as session:
         yield session
 
 
 def get_db() -> Generator[Session, None, None]:
+    _fork_stale_check()
     session = SessionLocal()
     try:
         yield session
@@ -206,7 +277,7 @@ def get_db() -> Generator[Session, None, None]:
         session.close()
 
 
-@event.listens_for(Engine, "before_cursor_execute")
+@sa_event.listens_for(Engine, "before_cursor_execute")
 def log_sql_execute(conn, cursor, statement, parameters, context, executemany):
     logger.debug(f"SQL QUERY: {statement} | Params: {parameters}")
 

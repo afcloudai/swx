@@ -8,7 +8,7 @@ from swx_core.auth.admin.dependencies import get_current_admin_user
 from swx_core.controllers import llm_controller
 from swx_core.database.db import SessionDep
 from swx_core.models.llm_provider_config import LLMProviderConfigCreate, LLMProviderConfigPublic, LLMProviderConfigUpdate
-from swx_core.contracts.llm import ValidateProviderResult
+from swx_core.contracts.llm import ValidateProviderResult, ProviderHealthStatus
 
 
 class LLMGenerateRequest(SQLModel):
@@ -70,6 +70,11 @@ async def generate(session: SessionDep, body: LLMGenerateRequest) -> dict[str, A
 @router.get("/health", response_model=dict[str, bool])
 async def health(session: SessionDep) -> dict[str, bool]:
     return await llm_controller.health_controller(session)
+
+
+@router.get("/health/detailed", response_model=list[dict[str, object]])
+async def health_detailed(session: SessionDep) -> list[dict[str, object]]:
+    return await llm_controller.health_detailed_controller(session)
 
 
 @router.get("/usage/{account_id}", response_model=dict[str, Any])

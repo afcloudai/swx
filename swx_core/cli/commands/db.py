@@ -1,8 +1,19 @@
 import click
 import subprocess
+import sys
 import shutil
 
 from swx_core.config.settings import settings
+
+
+def _python_module_cmd(module: str) -> list[str]:
+    """Run a swx_core database module by ``python -m``.
+
+    The modules carry their own main-guards; module invocation works from
+    site-packages installs where CWD-relative script paths
+    (``python swx_core/database/db_setup.py``) do not exist.
+    """
+    return [sys.executable, "-m", module]
 
 
 def _alembic_cmd(*args: str) -> list[str]:
@@ -25,7 +36,7 @@ def setup():
     - Checks database readiness.
     """
     try:
-        subprocess.run(["python", "swx_core/database/db_setup.py"], check=True)
+        subprocess.run(_python_module_cmd("swx_core.database.db_setup"), check=True)
         click.secho("✅ Database setup completed successfully!", fg="green")
     except subprocess.CalledProcessError:
         click.secho("❌ Error: Database setup failed!", fg="red")
@@ -39,7 +50,7 @@ def seed():
     - Used for initial application setup.
     """
     try:
-        subprocess.run(["python", "swx_core/database/db_seed.py"], check=True)
+        subprocess.run(_python_module_cmd("swx_core.database.db_seed"), check=True)
         click.secho("✅ Database seeding completed successfully!", fg="green")
     except subprocess.CalledProcessError:
         click.secho("❌ Error: Database seeding failed!", fg="red")

@@ -43,8 +43,12 @@ class Event:
     _metadata: Dict[str, Any] = field(default_factory=dict)
     
     def __hash__(self) -> int:
-        """Make Event hashable for use in sets and dict keys."""
-        return hash((self.name, id(self.payload), self.timestamp))
+        """Make Event hashable for use in sets and dict keys.
+
+        Uses a deterministic hash based on name and timestamp
+        instead of id(self.payload) which varies per process.
+        """
+        return hash((self.name, self.timestamp))
 
     def stop(self) -> None:
         """Stop event propagation."""
@@ -104,7 +108,8 @@ class EventBus:
     def __init__(self):
         self._listeners: Dict[str, List[ListenerRegistration]] = {}
         self._wildcard_listeners: List[ListenerRegistration] = []
-        self._fired: Dict[str, List[Event]] = {}  # For testing
+        self._fired: Dict[str, List[Event]] = {}
+        self._fired_max_per_event: int = 100  # cap per event name to prevent unbounded growth
 
     # =====================
     # REGISTRATION
@@ -237,10 +242,12 @@ class EventBus:
         # Create event object
         event_obj = Event(name=event, payload=payload, **kwargs)
 
-        # Track fired events for testing
+        # Track fired events for testing (bounded to prevent memory leak)
         if event not in self._fired:
             self._fired[event] = []
         self._fired[event].append(event_obj)
+        if len(self._fired[event]) > self._fired_max_per_event:
+            self._fired[event] = self._fired[event][-self._fired_max_per_event:]
 
         # Get all listeners
         listeners = self._get_listeners_for_event(event)
@@ -305,10 +312,11 @@ class EventBus:
         """
         event_obj = Event(name=event, payload=payload, **kwargs)
 
-        # Track for testing
         if event not in self._fired:
             self._fired[event] = []
         self._fired[event].append(event_obj)
+        if len(self._fired[event]) > self._fired_max_per_event:
+            self._fired[event] = self._fired[event][-self._fired_max_per_event:]
 
         listeners = self._get_listeners_for_event(event)
 

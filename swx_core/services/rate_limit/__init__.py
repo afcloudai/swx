@@ -30,6 +30,11 @@ from swx_core.services.rate_limit.rate_limit_override import (
     is_loaded,
     clear_overrides,
 )
+from swx_core.services.rate_limit.per_route import (
+    RouteRateLimitConfig,
+    route_limits,
+    rate_limit,
+)
 
 __all__ = [
     "RateLimiter",
@@ -50,4 +55,7 @@ __all__ = [
     "reload_overrides",
     "is_loaded",
     "clear_overrides",
+    "RouteRateLimitConfig",
+    "route_limits",
+    "rate_limit",
 ]

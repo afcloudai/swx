@@ -1,18 +1,26 @@
 # pyright: reportUnannotatedClassAttribute=false
 
 import hashlib
-import secrets
 import uuid
 from datetime import datetime
-from typing import Optional
+from enum import Enum
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, Text, func, text
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy import Boolean, Column, DateTime, Integer, func, text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.schema import ForeignKey
 from sqlmodel import Field, SQLModel
 
 from swx_core.models.base import Base
 from swx_core.utils.time import utc_now
+
+
+class ApiKeyEnvironment(str, Enum):
+    """API key environment (Stripe-style test/live separation)."""
+
+    TEST = "test"
+    LIVE = "live"
 
 
 def _hash_key(raw_key: str) -> str:
@@ -33,16 +41,25 @@ class ApiKeyBase(Base):
     hashed_key: str = Field(max_length=64, unique=True, index=True)
     user_id: uuid.UUID = Field(sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("swx_users.id"), nullable=False, index=True))
     is_active: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
-    expires_at: Optional[datetime] = Field(
+    expires_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
-    last_used_at: Optional[datetime] = Field(
+    last_used_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
-    rate_limit_override: Optional[int] = Field(default=None, sa_column=Column(Integer, nullable=True))
+    rate_limit_override: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     metadata_: dict[str, object] = Field(default_factory=dict, sa_column=Column(JSONB, server_default=text("'{}'::jsonb"), nullable=False))
+    environment: str = Field(
+        default="live",
+        sa_column=Column(
+            SAEnum("test", "live", name="apikeyenvironment"),
+            nullable=False,
+            server_default=text("'live'"),
+            index=True,
+        ),
+    )
 
 
 class ApiKey(ApiKeyBase, table=True):
@@ -75,8 +92,9 @@ class ApiKeyCreate(SQLModel):
     team_id: uuid.UUID | None = None
     name: str = Field(max_length=100)
     scopes: list[str] | list[dict[str, str]] = Field(default_factory=list)
-    expires_at: Optional[datetime] = None
-    rate_limit_override: Optional[int] = None
+    expires_at: datetime | None = None
+    rate_limit_override: int | None = None
+    environment: ApiKeyEnvironment = ApiKeyEnvironment.LIVE
 
 
 class ApiKeyScopeCreate(SQLModel):
@@ -91,11 +109,12 @@ class ApiKeyPublic(SQLModel):
     key_prefix: str
     user_id: uuid.UUID
     is_active: bool
-    expires_at: Optional[datetime]
-    last_used_at: Optional[datetime]
-    rate_limit_override: Optional[int]
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    rate_limit_override: int | None
     rotated_from_id: uuid.UUID | None = None
     is_expired: bool = False
+    environment: str = "live"
     created_at: datetime
     updated_at: datetime
 
@@ -125,5 +144,6 @@ class ApiKeyCreatedResponse(SQLModel):
     key_prefix: str
     raw_key: str
     scopes: list[ApiKeyScopePublic]
-    expires_at: Optional[datetime]
+    expires_at: datetime | None
+    environment: str = "live"
     created_at: datetime

@@ -2,6 +2,826 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.31.1] - 2026-10-25
+
+### Fixed
+
+- **Consumer callback regression** — the v2.31 oauth-callback rewire dropped the
+  existing-email lookup; email identities re-hitting the generic provider callback
+  re-registered (duplicate email). Restored `get_user_by_email` before the register
+  path + shipped as v2.31.1 (the v2.31.0 wheel predates the fix).
+
+## [2.31.0] - 2026-10-25
+
+### Added (SWX-IDM-001 v2.31 — OIDC full-conformance + identity gate + D-9 recovery)
+
+- **`end_session_endpoint`** (`GET /oidc/logout`, RP-initiated logout) — hint-validated subject revocation:
+  platform refresh tokens/sessions + ALL OIDC refresh families; `post_logout_redirect_uris` registered
+  per-client (exact-match; never redirects attacker URLs); discovery advertises `end_session_endpoint`.
+- **Introspection** (`POST /oidc/introspect`, RFC 7662) — confidential-clients-only; blacklist/expiry-aware;
+  cross-client → `active:false` (audited); refresh + access support.
+- **`offline_access` scoping (OIDC Core)** — refresh tokens mint only when the scope was requested;
+  `client_credentials` excludes `openid`/`offline_access`; discovery advertises the scope.
+- **Authorize params**: `prompt=none` → fail-closed `login_required`/`interaction_required` (+ cannot combine
+  with `login`/`consent`), `prompt=login` forces re-auth, `max_age` re-authenticates stale sessions,
+  `response_mode=query|fragment` (code in fragment supported).
+- **Identity verification gate (dual-OTP)** — `SWX_IDENTITY_REQUIRED_VERIFICATIONS=none|phone|email|both`;
+  `both` = bank-grade: `POST /user/identity-verification/request` sends OTP to BOTH channels (email OTP via
+  `EmailOtpChannel` + phone via the WhatsApp-estate channel), authorize refuses to issue until both confirm
+  (fail-closed `interaction_required`, audited).
+- **Phone-OTP account recovery (D-9)** — `POST /auth/recovery/{request,confirm}`: recovery OTP only for
+  VERIFIED phones (email-path unchanged); confirm resets the password AND revokes every active credential
+  (platform + OIDC families); enumera-safe by construction (#SWX-IDM-001 D-9).
+- **Consent surface** — `GET /user/oidc-consents` + `DELETE /user/oidc-consents/{client_id}` (revocation
+  shrinks the next authorize; audited).
+- **Federated provisioning fallback** — consumer callback resolves by IdP `sub` first; phone-verified
+  claims provision email-less identities via `provision_federated_identity` (Stage-1: linked login works for
+  email-bearing personas; true phone-only sessions tracked D-10).
+- **Email relaxed to optional** — `swx_users.email` nullable (migration v2_31_1 + template chains), model
+  schemas optional; "add nothing that makes email required" honored at the schema level (D-1).
+- **Audit events** — `auth.identity_verification_requested/confirmed`, `auth.phone_recovery_requested/completed`.
+
+## [2.30.0] - 2026-10-24
+
+### Added (SWX-IDM-001 — OIDC identity provider · AFCloud identity SSOT, ADR-017)
+
+- **OIDC provider module `swx_core/auth/oidc_provider/`** — first-class IdP:
+  `/oidc/authorize` (PKCE **S256 mandatory** for public clients, exact redirect
+  matching, consent recording for trusted first-party clients), `/oidc/token`
+  (authorization-code single-use with atomic consume + replay refusal,
+  **refresh rotation with reuse detection → family revocation**,
+  `client_credentials` for confidential first-party clients), `/oidc/revoke`
+  (RFC 7009, silent on unknown tokens), `/oidc/userinfo` (audience-bound,
+  scope-gated claims; **no email claims**), discovery + `/jwks.json`.
+- **Signing keys** — RS256 (default) / EdDSA with `kid` headers; private keys
+  encrypted at rest via the EncryptionService (`swx idp rotate-keys` with
+  verify-only overlap window + sweep-demote single-active invariant; JWKS keeps
+  publishing retired keys so old tokens verify until retirement).
+- **Admin client CRUD** `/admin/oidc/clients` — guarded `AdminUserDep` + strict
+  `idp:clients:read|write|manage` enforced over the **new `swx_admin_user_roles`
+  binding** (admin identities can now hold RBAC roles; `FIRST_SUPERUSER` root
+  carve-out); permission seeds in `scripts/seed_system.py`; grant bindings via
+  `swx idp bind-admin`.
+- **Phone-first verification** — `swx_users.phone` + `phone_verified_at`;
+  pluggable `PhoneVerificationChannel` (`SWX_PHONE_VERIFICATION_CHANNEL`;
+  default logs); OTP reuses the email-OTP machinery keyed `phone:<user_id>`;
+  user endpoints `POST /user/phone-verification/{request,confirm}`.
+- **Identity linking (D-7)** — `link_external_identity()` /
+  `resolve_user_by_idp_sub()` over `swx_social_accounts`, requires the IdP's
+  verified-phone claim; unique `(provider, provider_id)` index guarantees one
+  external subject ↔ one user.
+- **Additive audience extension (D-5)** — `create_token`/`decode_token` accept
+  plain-string audiences (`oidc_client:<id>`); OIDC and platform tokens are
+  mutually non-consumable; HS256 platform flows unchanged.
+- **CLI `swx idp`** — `rotate-keys [--dry-run]`, `keys list`, `seed --demo`,
+  `bind-admin`.
+- **Migrations** — standalone templates `v2_30_0` (OIDC tables), `v2_30_1`
+  (social-account identity uniqueness, fail-closed on duplicates), `v2_30_2`
+  (admin user-roles), `v2_30_3` (user phone verification) + chained equivalents
+  in the project scaffold.
+- **Conformance battery** — `tests/auth/oidc/` + `tests/cli/test_idp_commands.py`:
+  authorize/token/userinfo/revoke matrices (PKCE downgrade, redirect tampering,
+  code replay, refresh reuse → family revocation, client impersonation, TTL
+  boundaries), key rotation + JWKS, audience back-compat, phone verification,
+  identity linking (#SWX-IDM-001).
+- **Audit events** — `auth.oidc_authorize_denied`, `auth.oidc_token_denied`,
+  `auth.consent_granted/revoked`, `auth.token_issued/revoked/family_revoked`,
+  `auth.oauth_client_*`, `auth.oauth_key_rotated`, `auth.phone_verification_*`,
+  `auth.identity_linked` (hash-chained + SIEM enqueue automatic).
+- **Docs** — `docs/04-core-concepts/IDENTITY_PROVIDER.md`.
+
+## [2.29.5] - 2026-10-09
+
+### Fixed (locang-postcode-gateway `known-swx-core-issues.md` ISSUE-1/ISSUE-2)
+
+- **`swx db setup` / `swx db seed` use module invocation (`#ISSUE-1`)** — the CLI
+  subprocess-called CWD-relative script paths (`python swx_core/database/db_setup.py`)
+  that do not exist when `swx_core` is installed into site-packages (uv/pip), failing
+  with a generic "Database setup failed!". Both commands now run
+  `[sys.executable, "-m", "swx_core.database.db_setup" | "swx_core.database.db_seed"]` —
+  both modules carry main-guards, and `sys.executable` replaces the bare `"python"`
+  (pinned interpreter instead of whatever `PATH` resolves).
+- **`bcrypt>=4.0.1,<4.1.0` (`#ISSUE-2`)** — the previous `<4.4.0` range admitted
+  bcrypt 4.1–4.3, which removed `bcrypt.__about__` that passlib 1.7.4 probes at
+  backend load, crashing the superuser seed. The framework now pins the band all
+  sibling SWX applications pin (`bcrypt==4.0.1`), as a range. Release the bound only
+  when passlib ships a compatible probe. Verified live: `CryptContext` hash/verify
+  roundtrip on 4.0.1.
+
+## [2.29.4] - 2026-10-09
+
+### Fixed (ledger #15–#16 — rate limiting enforcement)
+
+- **Rate-limit middleware no longer globally exempted by the `"/"` skip entry (#15)** —
+  `_DEFAULT_SKIP_PATHS` contains `"/"` and matching used raw `startswith`, which every
+  absolute path satisfies: with default settings the limiter bypassed **every URL**.
+  `_path_matches` is now exact-or-directory-scoped (`/docs` still skips `/docs` and
+  `/docs/x`, no longer `/docsanything`; `"/"` matches only the exact root path). The
+  same tightening kills the silent `/api/utils/healthcheck`-style prefix over-match.
+- **Redis-backed rate limiting survives the boot-time module reload (#16)** —
+  `load_all_modules()` reloads every scanned module (loader.py reload branch), re-binding
+  `LimitWindow` to a fresh class while package-import-time bindings (middleware,
+  `swx_core.services.rate_limit.__init__`) keep the stale one. `_normalise_window`'s
+  class-identity `isinstance` then raised `TypeError` for every request; the limiter's
+  except-path turned that into `_fail_result` — fail-closed (deny all) by default,
+  fail-open (allow all) when configured, either way enforcement broken. Window
+  normalisation is now **value-based** (str-Enum members of any class identity and raw
+  `"1m"/"1h"/"24h"` strings all normalise; ints unchanged; garbage raises the documented
+  errors). Verified with a live `importlib.reload` + stale-member end-to-end check
+  (pre-fix: TypeError → fail result; post-fix: normal result).
+
+## [2.29.3] - 2026-10-05
+
+### Fixed (ledger #11–#13 — live-verified on 2.29.2)
+
+- **CSRF bootstrap deadlock (#11)** — a first-time cookie-less login 403'd under
+  `CSRF_ENABLED=true`: the middleware only mints the CSRF cookie on a
+  `needs_cookie_set` response, but the validation gate fires *before* that
+  response can ever be produced — no server path could deliver the first token.
+  Login paths are now **exempt from validation but keep minting** on their
+  response (login is pre-authentication: there is no session to forge; all
+  authenticated state-changing requests remain fully gated — double-submit
+  verified: paired → 200, unpaired → 403). `/api/auth` added to the default
+  `CSRF_LOGIN_PATHS`.
+- **`UserNewPassword.token` max_length 255 → 512 (#12)** — the HTTP
+  `POST /api/auth/password/reset` path 422'd on the framework's own reset JWTs
+  (~284 chars, live-minted), making the reset endpoint unusable end-to-end.
+- **Reset-token revocation check never awaited (#13)** — introduced in 2.29.0's
+  revocation wiring: `_reset_token_revoked` returned the registry coroutine
+  object instead of awaiting it; a coroutine is always truthy, so
+  **every** reset token verified as revoked and the entire password-reset flow
+  was dead (fail-closed by accident). `verify_password_reset_token` is now
+  async and awaits `is_reset_token_revoked`; the single service caller updated;
+  regression tests pin the async contract (iscoroutinefunction + end-to-end
+  accept/reject through the real registry with Redis).
+- **Form login reachable at `POST /api/auth/login`** (route-map) — the plain
+  form login previously lived only at `POST /api/auth/` (`@router.post("/")`),
+  while `CSRF_LOGIN_PATHS` and every doc assumed `/api/auth/login` (404 on the
+  real path). `/login` is now an explicit alias alongside `/` and `""`; all
+  three resolve to the same handler.
+
+### Verified (real-stack, docker Postgres + Redis)
+
+- Bare `POST /api/auth/login` → 200/400-range (handler ran) with `csrf_token`
+  set on the response — deadlock gone, protection intact.
+- Real 284-char reset token: minted → submitted → `verify_password_reset_token`
+  awaits registry → returns the correct email.
+
+## [2.29.2] - 2026-10-05
+
+### Fixed
+
+- **TenantAwareRepository no longer silently converts a set tenant context into
+  `WHERE false`** (live-repro'd in V2-015) — when a model lacked the configured
+  `tenant_field`/`team_field` (e.g. the default `"tenant_id"` wiring against an
+  org-keyed table like `OrganizationMember`, which carries `organization_id`), the
+  repository discarded the set tenant context and every read returned zero rows
+  forever, with no error and no warning — "empty data" was actually
+  "misconfigured wiring". Two-layer fix:
+  - **Construction-time**: `TenantAwareRepository(...)` raises `ConfigurationError`
+    immediately when the model has neither `tenant_field` nor `team_field`,
+    with guidance to pass the model's actual column (e.g. `tenant_field="organization_id"`)
+    or use `BaseRepository` for tenant-free models.
+  - **Query-time backstop**: `_apply_tenant_filter` raises `ConfigurationError`
+    when context is **set but unbindable** (e.g. team-field-only model receiving
+    tenant-only context). The fail-closed semantic contract is now explicit:
+    "empty result" means "no tenant context" — never "misconfigured wiring".
+  Consumers bypassing the failure via their own base classes (LocaNG's
+  `LNGTenantAwareRepository` pins `tenant_field="organization_id") are unaffected;
+  the construction check passes for them.
+
+## [2.29.1] - 2026-10-05
+
+### Fixed (P1 — boot-breaking)
+
+- **`email-validator` added to base dependencies** — pydantic `EmailStr` (used by
+  `swx_core/models/user.py` and user-facing route schemas) requires it at route-discovery
+  time on clean installs; 2.29.0 shipped without it and `create_swx_app()` crashed with
+  `ModuleNotFoundError` on clean projects.
+- **`check_database` / `check_database_pool` wrapped in `sqlalchemy.text(...)`** — both
+  executed bare `"SELECT 1"`, which SQLAlchemy 2.0 always rejects, so the framework's own
+  `/api/utils/health` reported `database: unhealthy` and `/utils/ready` 503'd on every
+  healthy SQLAlchemy 2.x install.
+- **`check_redis` reads `settings.redis_url` at call time** — previously defaulted to
+  `redis://localhost:6379` and was registered with no args, so containerized stacks
+  reported Redis failure while a healthy configured Redis was being ignored. Explicit
+  URL arguments still take precedence.
+
+### Fixed (P2/P3 — security hygiene & boot order)
+
+- **SECRET_KEY family required outside development** — `SECRET_KEY`,
+  `REFRESH_SECRET_KEY`, `PASSWORD_RESET_SECRET_KEY` silently self-generated per-process
+  random keys in production: all JWTs invalidated on restart, different keys per worker,
+  misconfiguration hidden. Settings load now **fails** when any of the three is unset in
+  `ENVIRONMENT=staging/production`; `local`/`dev`/`test` environments keep the
+  convenience fallback. (Implementation note: the fields are `Optional[str]` with a
+  fail-closed `model_validator`; `model_post_init` fills dev fallbacks — pydantic 2.13
+  re-runs post-init, so marker-in-default designs are defeated by the revalidation
+  ordering.)
+- **Startup audit-integrity check no longer crash-loops on fresh databases** — with
+  `DOCKERIZED=true`, `setup_database()` is skipped (prestart owns migrations) but the
+  integrity check queried `swx_audit_log` unconditionally, killing worker startup on any
+  fresh DB and — via `restart: unless-stopped` — SIGKILLing in-flight alembic runs
+  mid-DDL. The check now probes table existence: bounded 120s wait in Docker
+  (migrations run concurrently), graceful skip when the table is genuinely absent, and
+  tampering still fails hard (`RuntimeError`).
+- **Unknown `.env` keys now warn** — `extra="ignore"` made env typos silent (a
+  `SECRETT_KEY` typo booted with a default-derived secret). `Settings.model_post_init`
+  diffs `.env` keys against declared fields and emits a `UserWarning` listing unknown
+  keys; the check is scoped to `.env` (the user-owned surface) since `os.environ` is
+  full of unrelated system vars, and uses the explicit
+  `model_config["env_file"]` path (bare `dotenv_values()` frame-walks and resolves a
+  different file). `extra="warn"` was not used because pydantic-core rejects it at
+  schema-build time on current versions.
+
+### Fixed (P4 — DX)
+
+- **`load_all_models()` no longer pollutes `swx_core.models`** — it attached every
+  public attribute from every model submodule (SQLAlchemy internals: `func`, column
+  types, `datetime`), risking name collisions between submodules; it now attaches only
+  `SQLModel` subclasses. Boot logging demoted to `logger.debug` on the framework logger
+  (previously ~1000 `DEBUG: Attached ...` lines bypassed the JSON formatter to stdout).
+- **Template alembic chain hardened** — `template/project/migrations/env.py` now sets a
+  `NAMING_CONVENTION` (deterministic constraint/index names for safe downgrade
+  resolution) and an `include_object` filter restricted to managed prefixes
+  (`swx_`/`alembic_`); against `postgis/postgis` databases, unfiltered autogenerate
+  previously emitted `drop_table('zcta5')` for PostGIS/Tiger/Topology system tables and
+  failed with `DependentObjectsStillExistError`. Default revision `file_template` added
+  to `alembic.ini`.
+
+### Known Pre-existing Issues (unfixed, documented)
+
+- `tests/services/test_api_key_scoping.py::test_rotate_api_key_emits_rotated` and
+  `tests/core/test_middleware_stack.py::test_apply_functions_exist` fail at baseline
+  (missing `deactivate_and_extend_key` AsyncMock; `correlation_id` middleware spec
+  lacks a test-side apply-fn entry).
+- `swx_app/models/` contains intentionally-broken loader fixtures (`123_invalid.py`,
+  `product!.py`) tracked in git — they emit boot-time loader errors in developer
+  checkouts.
+
+## [2.29.0] - 2026-10-04
+
+### Security (Critical)
+
+- **API-key scopes are now enforced** — `APIKeyGuard.authenticate()` previously built
+  `AuthenticatedUser(permissions=[])`: every scope row in `swx_api_key_scope` was stored
+  and rotatable but never checked, so a read-only-scoped key could call any endpoint the
+  guard covered. The guard now loads active scopes via the service layer and maps them
+  onto `permissions` as `resource:action` strings, and new dependencies
+  `require_scope()` / `require_any_scope()` (`swx_core.guards.scopes`) enforce them
+  wildcard-aware on the granted side. A key with no scopes now only reaches endpoints
+  that require no permission/scope.
+- **API keys are header-only by default** — `APIKeyGuard(query_param="api_key")` accepted
+  keys as URL query parameters, leaking them into access logs, proxies, browser history,
+  and referrer headers. The default is now header-only; legacy query transport is opt-in
+  via the new `API_KEY_QUERY_PARAM` setting (or `query_param=` constructor arg).
+- **RLS helper no longer interpolates SQL** — `database/rls.py` interpolated tenant ID
+  into `SET LOCAL` statements. Rewritten around `set_config` with bind parameters where a
+  SQLAlchemy connection is available, canonical-UUID/bool validation + fixed-key assembly
+  on the raw DBAPI checkout path, and a `checkin` RESET so pooled connections never carry
+  stale tenant context. Also adds `tenant_rls_policy_sql()` for per-table policy DDL and
+  fixes the dead `connect`-event listener (it ran outside any transaction, so `SET LOCAL`
+  was a no-op).
+- **Session middleware secure defaults + configuration** — `SessionMiddleware` was
+  hard-coded (`max_age=86400`, `same_site="lax"`, `https_only=False`) with no knobs.
+  New `SESSION_MAX_AGE`, `SESSION_SAME_SITE`, and `HTTPS_ONLY` settings — `HTTPS_ONLY`
+  defaults to `True` in production/staging via `ENVIRONMENT`, `False` locally (explicit
+  override available).
+- **Password-reset tokens are revocable** — reset JWTs previously carried no `jti`, so
+  they were unaddressable: old reset links stayed valid until expiry (up to 48h) after
+  the password changed. All framework JWTs now carry `jti`+`iat`; `verify_password_reset_token()`
+  consults the token blacklist (jti lookup + email-keyed user-level revocation via the new
+  `swx_core.security.password_reset_registry`), and both `reset_password_service()` and
+  `update_password_service()` revoke every outstanding reset link for the user on
+  successful password change. Verification fails closed on registry outages.
+- **Fail-closed RBAC variant** — `has_permission()` bakes in an `is_superuser` bypass
+  (discouraged for hard boundaries). New `has_permission_strict()` helper and
+  `require_permission_strict()` dependency provide the no-bypass variant; the framework
+  now supplies the fail-closed pattern downstream consumers were hand-rolling incorrectly.
+
+### Fixed
+
+- **DB engine lifecycle is fork-safe and reset-correct** — `AsyncSessionLocal`/`SessionLocal`
+  bound the engine at import time, so `reset_engine()` left session factories attached to a
+  disposed engine. Session factories now lazily rebind (callable `_LazySessionFactory`), and
+  `get_async_engine()`/`get_engine()` self-heal on pid change: a process that forked after
+  pool creation discards the parent's engines and rebuilds. `reset_engine()` documentation
+  now states the fork/worker contract explicitly.
+- **`APIKeyGuard` session resolution repaired** — `authenticate()` read
+  `request.state.db_session`/`app.state.db_session`, which nothing in the framework ever
+  set, so stock deployments failed closed. The guard now falls back to the container-scoped
+  `db.session` binding, and `validate_token()`/`revoke_token()` accept an optional
+  request-scoped session (standalone session only as documented fallback). Revocation now
+  routes through `api_key_service.revoke_api_key()` (audit + events) instead of touching
+  the repository directly.
+- **`check_celery` health check fallback** — previously read a nonexistent
+  `settings.celery_app` attribute and always reported degraded; it now falls back to the
+  shipped Celery factory (`swx_core.jobs.get_celery_app()`).
+
+### Added
+
+- **API-key environments (`test`/`live`)** — `ApiKey.environment` column (Stripe-style
+  separation) with `ApiKeyEnvironment` enum on model/schemas, propagation through
+  create/rotate/validate/list/analytics, exposure in guard metadata, and migration
+  template `swx_core/database/migrations/v2_22_19_add_api_key_environment.py`.
+- **Celery worker factory** — `swx_core.jobs` ships `create_celery_app()` /
+  `get_celery_app()` honoring `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`/Redis settings,
+  fulfilling the `[jobs]` extra contract. Consumers no longer hand-roll their app factory.
+- **Scope-checking dependencies** — `require_scope(scope)` and
+  `require_any_scope(*scopes, all_required=, optional=)` in `swx_core.guards.scopes`,
+  exported from `swx_core.guards`.
+
+### Changed
+
+- **Single boot path** — `swx_core/main.py` previously ran a 12-step hard-coded lifespan
+  alongside `app_factory.create_swx_app`'s `LifecycleManager` path; the two had begun to
+  drift. `main.py` now delegates to `create_swx_app()`; the recursion-limit startup step
+  moved into the factory's lifespan. Only `create_swx_app` remains as the canonical entry.
+- **Settings single source of truth** — `settings.py` re-declared ~66 module-level
+  constants next to the mixin fields (some hard-coded literals, some import-time
+  snapshots), with `extra="ignore"` making env typos silent. COMPLIANCE_*/GDPR_*/
+  NOTIFICATION_* blocks moved into `ComplianceSettingsMixin`/`FeaturesSettingsMixin`, and
+  every module-level constant is now an alias onto the `settings` instance — env/DB
+  overrides of `API_KEY_*`, `WEBHOOK_*`, etc. are no longer silently ignored by services
+  that imported the constants.
+- **Team stack status documented** — the Team models/services are kept (they anchor
+  tenant scoping: `ApiKey.team_id`, RLS template, personal-team hooks) but marked as
+  superseded by the Organization stack for new SaaS projects in `models/team.py`.
+
+### Migration Notes
+
+- `API_KEY_QUERY_PARAM` defaults to empty (header-only). Copy
+  `v2_22_19_add_api_key_environment.py` into your project migrations and set
+  `down_revision` before `alembic upgrade head`.
+- `verify_password_reset_token()` now consults the revocation registry when a blacklist
+  is bound; pass `check_blacklist=False` only for offline tooling.
+- Prefer `require_permission_strict()` on new security-sensitive routes.
+
+## [2.28.2] - 2026-09-21
+
+### Fixed
+
+- **RecursionError from bare UUID foreign_key fields** — `erasure_certificate.user_id`,
+  `erasure_certificate.request_id`, `social_account.user_id`, and `mfa.user_id` used
+  `Field(foreign_key="...")` without an explicit `sa_column`. SQLModel delegates to
+  SQLAlchemy's type coercion which creates infinite recursion in
+  `TypeEngine._cached_result_processor` for UUID types, crashing any query that touches
+  these models. All four fields now use explicit `sa_column=Column(PG_UUID(as_uuid=True),
+  ForeignKey("..."))` with correct nullable and index flags. (P0 production crash)
+
+### Added
+
+- **Configurable Python recursion limit** — New `PYTHON_RECURSION_LIMIT` setting in
+  `InfraSettingsMixin` (default: 2000). Applied at application startup via
+  `sys.setrecursionlimit()` before any database operations. Defense-in-depth: even if
+  another unexpected recursion path is hit in SQLAlchemy type resolution, the worker
+  process won't crash with the default 1000 limit. Configurable via `PYTHON_RECURSION_LIMIT`
+  environment variable without code changes.
+
+## [2.27.0] - 2026-09-10
+
+### Added
+
+- **FR-001: Inference Health Check Protocol Method** — Added `ProviderHealthStatus` Pydantic
+  model and `health()` async method to `LLMProviderContract`. Returns structured health
+  status with `healthy`, `latency_ms`, `model_loaded`, `gpu_utilization`, `vram_used_gb`,
+  `vram_total_gb`, and `error` fields. All existing providers (OpenAI, Azure, Anthropic,
+  Ollama) now override `health()` with provider-specific diagnostics. Ollama additionally
+  queries `/api/ps` for GPU/VRAM stats when available. Default implementation falls back to
+  `health_check()` for backward compatibility with custom providers.
+
+- **FR-002: Weekly Billing Interval with Hard Reset** — Added `WeeklyWindowService` to
+  `usage_window_service.py` with `get_weekly_usage()`, `reset_weekly_usage()`,
+  `check_weekly_limit()`, and `record_weekly_usage()` methods. Implements hard-reset
+  semantics where usage resets to zero on a fixed weekly schedule (subscription anniversary
+  day) rather than rolling. Uses Redis-primary with in-memory fallback, matching the existing
+  `UsageWindowService` pattern. New settings: `QUOTA_WEEKLY_ENABLED`, `QUOTA_WEEKLY_DEFAULT_TOKENS`
+  (5M), `QUOTA_WEEKLY_TTL_DAYS` (8).
+
+- **FR-003: Compute Unit Abstraction Layer** — Added `ComputeUnitService` in
+  `compute_unit_service.py` with `ModelMultiplier` and `ComputeUnitResult` Pydantic models.
+  Converts raw token counts to compute units using configurable per-model multipliers
+  (input/output). Supports four levels (LEVEL_1 through LEVEL_4) with configurable
+  multipliers via `COMPUTE_UNIT_LEVELS` setting. Singleton via `get_compute_unit_service()`.
+
+- **FR-004: Provider Health Check Endpoint** — Added `GET /admin/llm/health/detailed` endpoint
+  returning structured per-provider health status including GPU utilization, VRAM usage,
+  model loaded status, and latency. Delegates to each provider's `health()` method for
+  rich diagnostics beyond the existing boolean `/health` endpoint.
+
+- **FR-005: Extended LLMProviderType for Self-Hosted Inference** — Added `VLLM`, `SGLANG`,
+  and `LLAMACPP` to the `LLMProviderType` enum. Created three new provider modules
+  (`vllm_provider.py`, `sglang_provider.py`, `llamacpp_provider.py`) that implement the
+  OpenAI-compatible wire protocol. Each includes `generate()`, `stream()`, `health()`,
+  `validate_api_key()`, and `list_models()`. Self-hosted providers expose GPU/VRAM stats
+  via their native health endpoints. Default provider configurations and model lists added
+  to settings.
+
+## [2.26.16] - 2026-09-09
+
+### Fixed
+
+- **Bug: `_register_router()` prefix mutation silently ignored in newer FastAPI** —
+  The v2.26.14 fix mutated `module_router.prefix` after route definitions and passed
+  `include_prefix` to `include_router()`. In newer FastAPI (0.115+), mutating
+  `APIRouter.prefix` after routes are defined does NOT affect path resolution:
+  routes defined on `APIRouter()` (no `prefix=`) with short decorator paths like
+  `@router.get("/gate/verify")` would resolve at `/api/v1/gate/verify` instead of
+  `/api/v1/fleet/gate/verify` — missing the derived prefix entirely.
+
+  Replaced the `.prefix` mutation with `_prefix_embedded_in_routes()`, a detection
+  function that inspects whether the resolved prefix is already baked into route
+  paths. When the prefix is embedded (aggregated packages with sub-router prefixes,
+  or leaf modules using `APIRouter(prefix=...)`), `include_router()` receives only
+  `include_prefix`. When the prefix is NOT embedded (leaf modules with short decorator
+  paths), `include_router()` receives `full_path` instead. This eliminates `.prefix`
+  mutation entirely and works correctly across all FastAPI versions.
+
+## [2.26.15] - 2026-09-09
+
+### Fixed
+
+- **Bug: `ROUTE_PREFIX = ""` in route modules triggered auto-derivation instead of
+  mounting at root** — The `if not user_defined_prefix:` guard treated an explicitly
+  set `ROUTE_PREFIX = ""` the same as a missing prefix, causing the auto-derivation
+  logic to inject module-name prefixes that the developer deliberately suppressed.
+
+  Added `prefix_explicitly_set` tracking: when `ROUTE_PREFIX` is present in the module
+  (even if empty), auto-derivation is skipped and the empty prefix is honored. This lets
+  modules opt out of path-prefixing entirely by setting `ROUTE_PREFIX = ""`.
+
+  Also fixed: the `/` normalization guard (`if not user_defined_prefix.startswith("/")`)
+  now only runs when `user_defined_prefix` is non-empty, so an explicit empty prefix
+  stays empty instead of being forced to `"/"`.
+
+## [2.26.14] - 2026-09-09
+
+### Fixed
+
+- **Bug: `_register_router()` v2.26.12 fix caused double-prefix for aggregated packages** —
+  The v2.26.12 fix removed `module_router.prefix = user_defined_prefix` and passed
+  `full_path` to `include_router()`. This broke the aggregated package pattern (e.g.
+  `admin/__init__.py`, `user/__init__.py`) because FastAPI composes the `include_router`
+  prefix with each sub-router's own `.prefix`. When `admin_router = APIRouter()` (no
+  prefix) includes `auth_router = APIRouter(prefix="/admin/auth")` and is then registered
+  with `include_router(prefix="/api/admin")`, the sub-router's `/admin/auth` prefix
+  composes on top, producing `/api/admin/admin/auth/login` instead of
+  `/api/admin/auth/login`.
+
+  Restored the `.prefix` mutation pattern (set `module_router.prefix` before
+  `include_router`) and pass only `include_prefix` (not `full_path`) to
+  `include_router()`. FastAPI composes `include_prefix + module_router.prefix` for the
+  outer context, and sub-router `.prefix` attributes resolve correctly within that
+  context. Verified with TestClient: all core routes resolve at correct paths, and
+  double-prefixed paths return 404.
+
+## [2.26.13] - 2026-09-09
+
+### Added
+
+- **SSE cross-worker delivery via Redis Pub/Sub** — `SSERedisBridge` bridges
+  `SSEManager.broadcast()` across multiple worker processes. Without this bridge,
+  SSE events published on worker N only reach subscribers connected to worker N;
+  subscribers on other workers never receive the event. The bridge publishes
+  broadcasts to Redis channel `swx:sse:{channel}` and each worker's listener
+  re-delivers to local subscribers. Controlled by `SSE_BRIDGE_ENABLED` (default:
+  True) and `SSE_BRIDGE_CHANNEL_PREFIX` (default: `swx:sse`) settings.
+
+### Fixed
+
+- **Loop prevention**: Events arriving from Redis carry a `_broadcast_source`
+  marker that prevents re-publishing, matching the same pattern used by
+  `RedisEventBridge` for EventBus events.
+
+- **`SSEManager._push_to_local_subscribers()` was sync** — `StatsCollector`
+  methods `sse_delivered` and `sse_evicted` are async; the old inline loop
+  called them with `await` correctly, but the extracted method needed to be
+  `async def` to preserve that. Fixed.
+
+- **`SSERedisBridge._listen_loop()` stale pubsub reference** — After reconnect,
+  the loop continued reading from the captured `pubsub` local variable instead
+  of the updated `self._pubsub`. Fixed by re-reading `self._pubsub` each
+  iteration.
+
+## [2.26.12] - 2026-09-06
+
+### Fixed
+
+- **Bug: `_register_router()` prefix mutation silently dropped WebSocket routes from the route tree** —
+  `module_router.prefix = user_defined_prefix` mutated the child router's prefix attribute, but
+  `include_router()`'s `prefix` argument took precedence, making the mutation ineffective. Both HTTP
+  and WebSocket routes resolved at `include_prefix + route.path` instead of the logged
+  `include_prefix + user_defined_prefix + route.path`. The logged path was misleading — routes
+  registered at a different path than reported. Fixed by composing `full_path` and passing it
+  directly as the `prefix` argument to `include_router()`.
+
+- **Bug: No WebSocket endpoints existed in the route tree** — The `websocket_router` auto-discovery
+  mechanism in `router.py` was functional, but no module in swx_core defined a `websocket_router`
+  attribute. All WebSocket upgrade requests returned 403 (uvicorn's default for connections closed
+  before accept) with no error or warning. Added `swx_core/routes/ws_route.py` with a
+  `websocket_router` that registers `/ws/{device_id}` using `ConnectionManager`.
+
+## [2.26.11] - 2026-09-06
+
+### Fixed
+
+- **Bug: `EventBus._fired` dict grows without bound (memory leak)** —
+  Every dispatched event was appended to `_fired[event]` with no cap, causing
+  unbounded memory growth in long-running production processes. Added a
+  per-event cap of 100 entries (oldest entries are pruned automatically).
+
+- **Bug: `Event.__hash__` uses `id(self.payload)` (non-deterministic)** —
+  `hash((self.name, id(self.payload), self.timestamp))` produced different
+  hashes for identical events across processes and even within the same process
+  (since `id()` is the memory address). Changed to `hash((self.name, self.timestamp))`
+  for deterministic hashing. Note: `Event` is `frozen=False` so mutation after
+  hashing is still possible but was already the case.
+
+- **Bug: `GracefulShutdown._drain_and_exit` never terminates the process** —
+  After draining (or timeout), the method just logged and returned — the process
+  kept running. Added `os._exit(0)` to actually terminate. Also fixed
+  `drain_check()` which returned `True` when `_shutting_down` was `True`
+  regardless of drain status — now only returns `True` when `_drain_event`
+  is set. Added Windows compatibility for `SIGTERM` (graceful degradation).
+
+- **Bug: `SSEManager._subscribers` race condition during `stop()` + `subscribe()`** —
+  `_subscribers` dict was modified without locking. In an asyncio context,
+  re-entrancy between `subscribe()`, `broadcast()`, and `stop()` could cause
+  stale references. Added `asyncio.Lock` to protect subscriber mutations
+  in `subscribe()`, `_remove_subscriber()`, and the keepalive loop.
+
+- **Bug: `ConnectionManager.send()` accepts empty string key `""`** —
+  An empty key would create connections that are hard to debug. Added a
+  `ValueError` guard in `send()` to reject empty keys early.
+
+- **Bug: `StatsCollector` unbounded memory for transient channels/connections** —
+  Per-channel and per-connection stats dicts never removed entries for
+  disconnected channels/connections. Added `cleanup_stale()` method that
+  removes entries with zero subscribers or disconnected status. Applications
+  should call this periodically (e.g. from a keepalive loop).
+
+- **Bug: `BackgroundScheduler._run_loop` tight loop when handler exceeds interval** —
+  When a job's handler takes longer than its interval, `remaining` becomes
+  negative and the job runs again immediately with no rest period. Changed
+  `await asyncio.sleep(remaining)` to `await asyncio.sleep(max(remaining, _MIN_SLEEP))`
+  with a 1-second minimum, preventing CPU-spinning tight loops.
+
+## [2.26.10] - 2026-09-06
+
+### Fixed
+
+- **Bug: `SSEManager._format_event()` strips `"event"` key from data payload** —
+  `_format_event()` removed both `"id"` and `"event"` from the JSON payload, but
+  `"event"` is data content that should appear in both the SSE `event:` line and
+  the `data:` JSON. Stripping it meant clients lost the event type in the payload.
+  Changed the filter to only exclude `"id"` (which is a separate SSE field).
+
+- **Bug: SSE `_format_event()` doesn't handle multiline data per SSE spec** —
+  Per W3C SSE specification, each line of a `data:` field must be prefixed with
+  `data:`. If `json.dumps` with `default=str` produces newlines (e.g. from
+  multi-line string representations), the old code would break framing. Now
+  splits the JSON on `\n` and emits each line as a separate `data:` line.
+
+- **Bug: `SSEBridge.bridge()` / `WSBridge.bridge()` — duplicate registration leaks old handler** —
+  Calling `bridge()` twice for the same event name silently overwrote the `_registrations`
+  entry while leaving the old handler registered on the EventBus. Now `bridge()` calls
+  `unbridge()` first if the event is already registered, ensuring the old handler is
+  properly removed before registering the new one.
+
+- **Bug: `CorrelationIdMiddleware` — no validation on client-supplied `X-Correlation-ID`** —
+  Clients could inject arbitrary strings (including CRLF characters for header injection,
+  or megabyte-length values). Added a regex validation (`^[a-zA-Z0-9._\-]{1,128}$`) and
+  length limit (128 chars). Invalid client IDs are replaced with a generated UUID.
+
+- **Bug: `query.py` — `async with get_session()` on async generator (4 occurrences)** —
+  `get_session()` is an async generator (`async def ... yield`), not an async context
+  manager. Using `async with get_session() as session:` raises `TypeError`. Changed all
+  4 occurrences to use `AsyncSessionLocal()` which is a proper async context manager.
+
+- **Bug: `UnitOfWork.__aenter__/__aexit__` — `get_session()` is not an async context manager** —
+  `UnitOfWork` called `get_session().__aenter__()` and `__aexit__()`, but async generators
+  don't implement these methods. Changed to use `AsyncSessionLocal()` which returns an
+  `AsyncSession` with proper `__aenter__`/`__aexit__` support.
+
+- **Code-clarity: `_registrations` type annotation mismatch** —
+  `SSEBridge._registrations` and `WSBridge._registrations` were typed as
+  `Dict[str, str]` but stored `tuple[str, Any]` values. Fixed to
+  `Dict[str, tuple[str, Any]]`.
+
+- **Code-clarity: duplicate `_SECRET_FIELDS` in `provider_factory.py`** —
+  `_SECRET_FIELDS_EMAIL` and `_SECRET_FIELDS_SMS` were defined twice (lines 38-39 and 71-72).
+  Removed the duplicate definition.
+
+- **Bug: `check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** —
+  (From v2.26.9, included here for completeness.) `get_session()` is an async generator,
+  not an async context manager. Changed both functions to use `__anext__()` / `aclose()`.
+
+## [2.26.9] - 2026-09-06
+
+### Fixed
+
+- **Bug: `check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** —
+  `get_session()` is an async generator (`async def ... yield`), not an async context manager.
+  Using `async with get_session() as session:` raised `TypeError: 'async_generator' object does not
+  support the asynchronous context manager protocol`, causing `/health` and `/ready` to return 503.
+  Changed both functions to use `__anext__()` / `aclose()` to properly consume and close the async
+  generator.
+
+## [2.26.8] - 2026-09-06
+
+### Fixed
+
+- **Bug: `SSEBridge.unbridge()` / `WSBridge.unbridge()` — handler reference mismatch** —
+  `unbridge()` created a new `_noop` async function and passed it to
+  `EventBus.forget()`, but `forget()` matches handlers by identity. The `_noop`
+  never matched the original `_handler` closure, so `unbridge()` was a no-op
+  and the listener stayed registered forever. Changed `_registrations` to store
+  `(event, handler)` tuples so `unbridge()` passes the exact handler reference
+  to `forget()`.
+
+- **Bug: `ConnectionManager._queue_pending()` silently drops messages for disconnected keys** —
+  When `send()` was called for a disconnected key, `_queue_pending()` looked up
+  `_connections.get(key)` which returned `None` after `disconnect()` removed the
+  entry, so the message was silently discarded despite incrementing the `queued`
+  metric. Added `_disconnected_pending: Dict[str, Deque[str]]` that persists
+  across disconnects. Messages queued for offline keys are now correctly drained
+  on reconnect.
+
+- **Bug: `ConnectionManager.disconnect()` discards pending messages** —
+  `disconnect()` popped the `_Connection` object, destroying its `pending` deque.
+  Any undrained messages were lost. Now `disconnect()` transfers the pending deque
+  to `_disconnected_pending` before closing the socket.
+
+- **Style: Missing blank line between top-level classes in `app_factory.py`** —
+  Added PEP 8 required two blank lines between `_SSEManagerService` and
+  `_CacheRefreshService`.
+
+## [2.26.7] - 2026-09-06
+
+### Fixed
+
+- **Bug: `ConnectionManager.connect()` calls `websocket.accept()` unconditionally** —
+  When an auth flow calls `await websocket.accept()` before passing the socket to
+  `connect()`, the second `accept()` raises a `RuntimeError`. Added `accept: bool = True`
+  keyword-only argument to `connect()` so callers that accept the WebSocket themselves
+  can pass `accept=False` to skip the duplicate call. Fully backward-compatible.
+
+## [2.26.6] - 2026-09-06
+
+### Fixed
+
+- **Bug: `/api/utils/health` returns 500 — datetime not JSON-serializable** —
+  `health_detailed()` called `result.model_dump()` which returns raw Python
+  `datetime` objects. `JSONResponse` uses `json.dumps()` which can't serialize
+  `datetime`. Changed both `/health` and `/ready` endpoints to use
+  `model_dump(mode="json")` so Pydantic converts datetimes to ISO strings.
+
+- **Bug: `register_exception_handlers` parameter shadows imported function** —
+  The `register_exception_handlers: bool` parameter in `create_swx_app()`
+  shadowed the imported `register_exception_handlers()` function from
+  `swx_core.exceptions.handlers`, causing `TypeError: 'bool' object is not
+  callable` at startup. Renamed the parameter to `install_exception_handlers`
+  to eliminate the shadow.
+
+- **Bug: `on_startup` does not await async callables** —
+  `on_startup` was typed as `Callable[[FastAPI], None]` and called
+  synchronously, so passing an `async def` function would silently return an
+  unawaited coroutine. Now uses `inspect.isawaitable()` to detect and await
+  async callables inside the lifespan. Type annotation broadened to
+  `Callable[[FastAPI], Any]`.
+
+- **Bug: `settings.VERSION` AttributeError in `create_swx_app()`** —
+  (v2.26.4 fix, included for completeness) `get_health_checker()` already
+  resolves version from `swx_core.__version__`, so `version=settings.VERSION`
+  was both broken and unnecessary.
+
+## [2.26.5] - 2026-09-06
+
+### Fixed
+
+- **Bug: `register_exception_handlers` parameter shadows imported function** —
+  The `register_exception_handlers: bool` parameter in `create_swx_app()`
+  shadowed the imported `register_exception_handlers()` function from
+  `swx_core.exceptions.handlers`, causing `TypeError: 'bool' object is not
+  callable` at startup. Renamed the parameter to `install_exception_handlers`
+  to eliminate the shadow.
+
+- **Bug: `on_startup` does not await async callables** —
+  `on_startup` was typed as `Callable[[FastAPI], None]` and called
+  synchronously, so passing an `async def` function would silently return an
+  unawaited coroutine. Now uses `inspect.isawaitable()` to detect and await
+  async callables inside the lifespan. Type annotation broadened to
+  `Callable[[FastAPI], Any]`.
+
+## [2.26.4] - 2026-09-06
+
+### Fixed
+
+- **Bug: `create_swx_app()` references `settings.VERSION` which doesn't exist** —
+  `get_health_checker(version=settings.VERSION)` would crash at startup because
+  `Settings` has no `VERSION` attribute. Changed to `get_health_checker()` which
+  already falls back to importing `__version__` from `swx_core.version`.
+
+## [2.26.3] - 2026-09-05
+
+### Added
+
+- **FR1: Email/SMS sender registration API** —
+  `swx_core.services.notifications.provider_factory` now exposes
+  `register_email_sender()` and `register_sms_sender()` so applications can
+  plug in custom notification backends without subclassing.
+
+- **FR2: `production_validator` parameter in `create_swx_app()`** —
+  Accepts a `Callable[[Settings], list[str]]` that runs during lifespan
+  startup.  Return a list of warning messages; empty list = all checks pass.
+
+- **FR3: `on_startup` parameter in `create_swx_app()`** —
+  Accepts a sync or async callable executed after providers boot but before
+  the app starts accepting requests.  Use for one-time warm-up (cache
+  priming, feature-flag sync, etc.).
+
+- **FR4: `disable_docs_in_production` parameter in `create_swx_app()`** —
+  When `True` and `ENVIRONMENT == "production"`, removes `/docs` and
+  `/redoc` endpoints and sets `openapi_url = None` to prevent schema
+  leakage.
+
+- **FR5: SSEManager + SSEEventStore** —
+  `swx_core.sse.manager.SSEManager` manages channel-based Server-Sent
+  Events connections with a pluggable `SSEEventStore` backend.
+  `swx_core.sse.stores` ships a Redis store (for multi-worker) and a
+  ring-buffer `InMemorySSEEventStore` (for single-process).
+
+- **FR6: ConnectionManager** —
+  `swx_core.websocket.connection.ConnectionManager` enforces one active
+  WebSocket connection per key, maintains a 64-message pending queue per
+  connection, and drains queued messages on reconnect.
+
+- **FR7: SSE↔EventBus Bridge** —
+  `swx_core.sse.bridge.SSEBridge` declaratively bridges `EventBus` events
+  to SSE channels: `sse_bridge.bridge("order.created", "orders")`.
+
+- **FR8: WebSocket↔EventBus Bridge** —
+  `swx_core.websocket.bridge.WSBridge` declaratively bridges `EventBus`
+  events to WebSocket targets: `ws_bridge.bridge("chat.message", target)`.
+
+- **FR9: StatsCollector** —
+  `swx_core.observability.stats.StatsCollector` tracks per-channel,
+  per-connection, and per-listener metrics for SSE, WebSocket, and
+  EventBus.  Exposes `health_check()` returning a typed dict.
+
+- **FR10: GracefulShutdown** —
+  `swx_core.lifecycle.graceful_shutdown.GracefulShutdown` orchestrates
+  orderly shutdown: drains in-flight requests, closes SSE/WebSocket
+  connections, cancels background tasks, then stops providers.  Wired into
+  `create_swx_app()` via the `graceful_shutdown` parameter.
+
+- **FR11: CorrelationIdMiddleware** —
+  `swx_core.middleware.correlation_id_middleware.CorrelationIdMiddleware`
+  generates a UUID correlation ID per request, stores it in
+  `scope["state"]["correlation_id"]`, and adds `X-Correlation-ID` to the
+  response headers.
+
+- **FR12: SSE Event Serializer Registry** —
+  `swx_core.sse.serializer.EventSerializerRegistry` allows applications to
+  register custom serializers per event type.  `SSEBridge` uses the
+  registry to serialize payloads before broadcasting.
+
+- **FR13: Background task failure alerts** —
+  `swx_core.background.BackgroundScheduler` now tracks consecutive
+  failures per `ScheduledJob` and emits an `AlertEngine` alert when the
+  count exceeds `alert_threshold` (default 3).  Exposes
+  `get_failure_counts()` for monitoring.
+
+- **FR14: Database pool health check** —
+  `swx_core.routes.utils.health.check_database_pool()` verifies the
+  SQLAlchemy async connection pool is accepting connections.
+
+- **FR15: Per-route rate limit configuration** —
+  `swx_core.services.rate_limit.per_route.RouteRateLimitConfig` supports
+  exact-path and regex-pattern rate limits.  Use the `rate_limit()` FastAPI
+  dependency to enforce per-route limits in your route handlers.
+
+### Fixed
+
+- **Bug 1: AuthServiceProvider.boot() RecursionError** — Lazy guard
+  resolution now defers `container.make()` calls until first request,
+  preventing circular dependency during startup.
+
+- **Bug 2: bootstrap_app() missing middleware** — `bootstrap_app()` now
+  accepts and forwards `register_middleware` to `create_swx_app()`.
+
+- **Bug 3: RateLimiter KeyError on `window=60`** —
+  `RateLimitMiddleware._normalise_window()` now accepts `int` values and
+  maps them to the correct `RateLimitWindow` enum.
+
+- **app_factory.py code-clarity** — Extracted `_AsyncTaskService` base,
+  removed broken startup probe, fixed PII encryption body.
+
+### Changed
+
+- Version bumped from 2.26.2 to 2.26.3 across `version.py`,
+  `pyproject.toml`, and `ai_exports/architecture.py`.
+
 ## [2.25.3] - 2026-09-05
 
 ### Fixed

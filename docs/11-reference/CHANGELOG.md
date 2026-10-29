@@ -1,13 +1,210 @@
 # Changelog
 
-**Version:** 2.25.3
-**Last Updated:** 2026-09-05
+**Version:** 2.28.0
+**Last Updated:** 2026-09-10
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
+
+---
+
+## Overview
+
+### Version 2.28.0 (2026-09-10)
+
+**WebSocket cross-worker relay, fork-safe singleton, worker observability**
+
+#### Added
+
+1. **`WSRedisBridge`** (`swx_core.websocket.redis_bridge`) — Bridges `ConnectionManager.send()` and `broadcast()` across gunicorn workers via Redis Pub/Sub, mirroring the `SSERedisBridge` architecture. Publishes to `swx:ws:{action}` channels; background listener delivers locally via `_deliver_from_redis()`. Loop prevention via `_broadcast_source="redis_ws"` marker.
+
+2. **Fork-safe singleton** — `ConnectionManager.create()` / `get_instance()` pattern replaces module-level instantiation. Created in app lifespan startup (`_WSManagerService`) after gunicorn fork. `ws_route.py` resolves the singleton at request time.
+
+3. **`_WSManagerService`** — Lifecycle service in `app_factory.py` that creates, starts, and stops the WS manager and Redis bridge alongside the existing SSE manager.
+
+4. **Per-connection metadata** — `connect()` accepts `metadata` dict (e.g. `user_id`, `ip`, `transport`) stored on the connection and returned by `connection_info()` / `all_connection_info()`.
+
+5. **`GET /admin/ws/status`** — Admin endpoint returning `worker_id`, active connections with per-connection metadata, aggregate metrics, and Redis bridge stats.
+
+6. **Settings** — `WS_BRIDGE_ENABLED` (default `True`), `WS_BRIDGE_CHANNEL_PREFIX` (default `"swx:ws"`).
+
+7. **Structured logging** — Every `ConnectionManager` and `WSRedisBridge` log line now includes `worker_id` (PID).
+
+8. **Observability properties** — `ConnectionManager.status`, `worker_id`, `connection_count`, `bridge_stats`, `metrics`.
+
+#### Fixed
+
+1. **Gunicorn fork bug** — Module-level `ConnectionManager()` in `ws_route.py` was fork-copied with an empty `_connections` dict. Replaced with `get_instance()` resolved at request time.
+
+2. **Double-publish in `send()`** — `_publish_to_redis()` was called on both local-success and queue-fallback paths, publishing disconnected-key messages twice. Refactored to `_send_local()` with a single `_publish_to_redis()` call at the `send()` level.
+
+3. **Dead loop-prevention check** — `_publish_to_redis()` parsed `message` as JSON to check for `SOURCE_META_KEY`, but `message` can be arbitrary text. Loop prevention is structural (`_deliver_from_redis` never calls `_publish_to_redis`). Removed dead code.
+
+4. **Dead code in `_handle_message`** — `SOURCE_META_KEY` check set an unused `source` variable then did `pass`. Removed.
+
+5. **Removed `send_sync` / `broadcast_sync`** — `asyncio.run()` in a forked gunicorn worker creates a new event loop with no access to the app's WS manager or Redis bridge. Both methods removed.
+
+### Version 2.26.15 (2026-09-09)
+
+**Bugfix: `ROUTE_PREFIX = ""` triggered auto-derivation instead of mounting at root**
+
+Setting `ROUTE_PREFIX = ""` in a route module was treated the same as not setting
+it at all, causing auto-derivation to inject module-name prefixes. Fixed by tracking
+whether `ROUTE_PREFIX` was explicitly set, skipping auto-derivation when it was.
+Also fixed the `/` normalization guard to not force empty prefixes to `"/"`.
+
+### Version 2.26.14 (2026-09-09)
+
+**Bugfix: Route registration double-prefix for aggregated packages**
+
+The v2.26.12 fix for `_register_router()` removed `module_router.prefix = user_defined_prefix`
+and passed `full_path` to `include_router()`. This broke the aggregated package pattern
+where `admin/__init__.py` includes sub-routers like `auth_route` (with `prefix="/admin/auth"`).
+FastAPI composed the sub-router's `.prefix` on top of the `include_router` prefix, producing
+`/api/admin/admin/auth/login` instead of `/api/admin/auth/login`.
+
+Fixed by restoring the `.prefix` mutation and passing only `include_prefix` to
+`include_router()`. FastAPI correctly composes `include_prefix + module_router.prefix` and
+resolves sub-router prefixes within that context.
+
+### Version 2.26.13 (2026-09-09)
+
+**Feature: SSE cross-worker delivery via Redis Pub/Sub**
+
+#### Added
+
+1. **`SSERedisBridge`** — Bridges `SSEManager.broadcast()` across worker processes via Redis Pub/Sub. Without this, SSE events on worker N only reach subscribers on worker N. The bridge publishes to `swx:sse:{channel}` and each worker re-delivers to local subscribers.
+
+2. **Settings**: `SSE_BRIDGE_ENABLED` (default True), `SSE_BRIDGE_CHANNEL_PREFIX` (default `swx:sse`).
+
+#### Fixed
+
+1. **Loop prevention**: Redis-sourced events carry `_broadcast_source="redis_sse"` marker, preventing re-publish loops.
+
+2. **`_push_to_local_subscribers()` async fix**: Stats methods are async; extracted method needed `async def`.
+
+3. **Stale pubsub reference after reconnect**: `_listen_loop()` now re-reads `self._pubsub` each iteration.
+
+### Version 2.26.12 (2026-09-06)
+
+**Bugfix: WebSocket routes silently unreachable — prefix mutation + missing WS endpoint**
+
+#### Fixed
+
+1. **`_register_router()` prefix mutation silently dropped routes from the route tree** — Mutating `module_router.prefix` before `include_router()` was ineffective because `include_router()`'s `prefix` argument took precedence. Both HTTP and WS routes resolved at wrong paths. Fixed by composing `full_path` and passing it directly to `include_router()`.
+
+2. **No WebSocket endpoints existed in the route tree** — The `websocket_router` auto-discovery mechanism was functional but no module defined it. Added `swx_core/routes/ws_route.py` with `/ws/{device_id}` endpoint.
+
+### Version 2.26.11 (2026-09-06)
+
+**Bugfix: EventBus memory leak, Event hash, GracefulShutdown exit, SSE race condition, and more**
+
+#### Fixed
+
+1. **`EventBus._fired` dict grows without bound (memory leak)** — Added per-event cap of 100 entries with automatic pruning.
+
+2. **`Event.__hash__` uses `id(self.payload)` (non-deterministic)** — Changed to `hash((self.name, self.timestamp))` for deterministic hashing.
+
+3. **`GracefulShutdown._drain_and_exit` never terminates the process** — Added `os._exit(0)`. Fixed `drain_check()` to only return True when drain is complete. Added Windows compatibility for `SIGTERM`.
+
+4. **`SSEManager._subscribers` race condition** — Added `asyncio.Lock` to protect subscriber mutations.
+
+5. **`ConnectionManager.send()` accepts empty string key** — Added `ValueError` guard.
+
+6. **`StatsCollector` unbounded memory for transient channels/connections** — Added `cleanup_stale()` method.
+
+7. **`BackgroundScheduler._run_loop` tight loop when handler exceeds interval** — Added 1-second minimum sleep.
+
+### Version 2.26.10 (2026-09-06)
+
+**Bugfix: SSE payload stripping, async generator misuse, bridge handler leak, header injection**
+
+#### Fixed
+
+1. **`SSEManager._format_event()` strips `"event"` key from data payload** — `_format_event()` removed both `"id"` and `"event"` from the JSON payload, but `"event"` is data content that should appear in both the SSE `event:` line and the `data:` JSON. Changed the filter to only exclude `"id"`.
+
+2. **SSE `_format_event()` doesn't handle multiline data per SSE spec** — Per W3C SSE specification, each line of a `data:` field must be prefixed with `data:`. Now splits the JSON on `\n` and emits each line as a separate `data:` line.
+
+3. **`SSEBridge.bridge()` / `WSBridge.bridge()` — duplicate registration leaks old handler** — Calling `bridge()` twice for the same event name silently overwrote `_registrations` while leaving the old handler on the EventBus. Now `bridge()` calls `unbridge()` first.
+
+4. **`CorrelationIdMiddleware` — no validation on client-supplied `X-Correlation-ID`** — Clients could inject arbitrary strings including CRLF characters for header injection. Added regex validation (`^[a-zA-Z0-9._\-]{1,128}$`) and length limit. Invalid IDs are replaced with a generated UUID.
+
+5. **`query.py` — `async with get_session()` on async generator (4 occurrences)** — `get_session()` is an async generator, not an async context manager. Changed all occurrences to use `AsyncSessionLocal()` which is a proper async context manager.
+
+6. **`UnitOfWork.__aenter__/__aexit__` — `get_session()` is not an async context manager** — `UnitOfWork` called `get_session().__aenter__()` and `__aexit__()`, but async generators don't implement these methods. Changed to use `AsyncSessionLocal()`.
+
+7. **`_registrations` type annotation mismatch** — `SSEBridge._registrations` and `WSBridge._registrations` were typed as `Dict[str, str]` but stored `tuple[str, Any]` values. Fixed to `Dict[str, tuple[str, Any]]`.
+
+8. **Duplicate `_SECRET_FIELDS` in `provider_factory.py`** — `_SECRET_FIELDS_EMAIL` and `_SECRET_FIELDS_SMS` were defined twice. Removed the duplicate.
+
+9. **`check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** — (From v2.26.9) Changed both functions to use `__anext__()` / `aclose()`.
+
+### Version 2.26.9 (2026-09-06)
+
+**Bugfix: health check 503 — async_generator does not support async with**
+
+#### Fixed
+
+1. **`check_database()` / `check_database_pool()` — `async_generator` does not support `async with`** — `get_session()` is an async generator (`async def ... yield`), not an async context manager. Using `async with get_session() as session:` raised `TypeError: 'async_generator' object does not support the asynchronous context manager protocol`, causing `/health` and `/ready` to return 503. Changed both functions to use `__anext__()` / `aclose()` to properly consume and close the async generator.
+
+### Version 2.26.8 (2026-09-06)
+
+**Bugfix: bridge unbridge handler mismatch, disconnected pending queue loss**
+
+#### Fixed
+
+1. **`SSEBridge.unbridge()` / `WSBridge.unbridge()` — handler reference mismatch** — `unbridge()` passed a new `_noop` async function to `EventBus.forget()`, but `forget()` matches handlers by identity. The `_noop` never matched the original `_handler` closure, so `unbridge()` was a no-op. Changed `_registrations` to store `(event, handler)` tuples so `unbridge()` passes the exact handler reference to `forget()`.
+
+2. **`ConnectionManager._queue_pending()` silently drops messages for disconnected keys** — When `send()` was called for a disconnected key, `_queue_pending()` looked up `_connections.get(key)` which returned `None` after `disconnect()` removed the entry, so the message was silently discarded. Added `_disconnected_pending: Dict[str, Deque[str]]` that persists across disconnects. Messages queued for offline keys are now correctly drained on reconnect.
+
+3. **`ConnectionManager.disconnect()` discards pending messages** — `disconnect()` popped the `_Connection` object, destroying its `pending` deque. Now transfers the pending deque to `_disconnected_pending` before closing the socket.
+
+4. **Missing blank line between top-level classes in `app_factory.py`** — Added PEP 8 required two blank lines between `_SSEManagerService` and `_CacheRefreshService`.
+
+### Version 2.26.7 (2026-09-06)
+
+**Bugfix: ConnectionManager.connect() unconditional websocket.accept()**
+
+#### Fixed
+
+1. **`ConnectionManager.connect()` calls `websocket.accept()` unconditionally** — Added `accept: bool = True` keyword-only argument so callers that accept the WebSocket themselves can pass `accept=False` to skip the duplicate call.
+
+### Version 2.26.6 (2026-09-06)
+
+**Bugfix: /api/utils/health 500 — datetime serialization**
+
+#### Fixed
+
+1. **`/api/utils/health` returns 500 — `datetime` not JSON-serializable** — `HealthCheckResult.model_dump()` returns raw Python `datetime` objects, which `JSONResponse` can't serialize. Changed to `model_dump(mode="json")` in both `/health` and `/ready` endpoints so Pydantic converts datetimes to ISO format strings.
+
+2. **`register_exception_handlers` parameter shadows imported function** — Renamed to `install_exception_handlers` to eliminate the shadow that caused `TypeError: 'bool' object is not callable`.
+
+3. **`on_startup` does not await async callables** — Added `inspect.isawaitable()` check to detect and await async callbacks. Type annotation broadened to `Callable[[FastAPI], Any]`.
+
+4. **`settings.VERSION` AttributeError** — (v2.26.4 fix) Changed `get_health_checker(version=settings.VERSION)` to `get_health_checker()`.
+
+### Version 2.26.5 (2026-09-06)
+
+**Bugfix: parameter shadowing and async on_startup**
+
+#### Fixed
+
+1. **`register_exception_handlers` parameter shadows imported function** — Renamed to `install_exception_handlers`.
+
+2. **`on_startup` does not await async callables** — Added `inspect.isawaitable()` check.
+
+### Version 2.26.4 (2026-09-06)
+
+**Bugfix: settings.VERSION AttributeError**
+
+#### Fixed
+
+1. **`create_swx_app()` references `settings.VERSION` which doesn't exist** — Changed to `get_health_checker()`.
+
+### Version 2.26.3 (2026-09-05)
 2. [Version History](#version-history)
 3. [Breaking Changes](#breaking-changes)
 4. [Deprecations](#deprecations)
@@ -29,6 +226,52 @@ This document tracks **version history and changes** for SwX-API. All notable ch
 ---
 
 ## Version History
+
+### Version 2.26.3 (2026-09-05)
+
+**Real-time infrastructure, observability, and production hardening**
+
+#### Added
+
+1. **FR1: Email/SMS sender registration API** — `register_email_sender()` and `register_sms_sender()` in `swx_core.services.notifications.provider_factory` let applications plug in custom notification backends without subclassing.
+
+2. **FR2: `production_validator` parameter** — `create_swx_app(production_validator=...)` accepts a `Callable[[Settings], list[str]]` that runs during lifespan startup. Return warning messages; empty list = all checks pass.
+
+3. **FR3: `on_startup` parameter** — `create_swx_app(on_startup=...)` accepts a sync or async callable executed after providers boot but before the app accepts requests. Use for cache priming, feature-flag sync, etc.
+
+4. **FR4: `disable_docs_in_production` parameter** — When `True` and `ENVIRONMENT == "production"`, removes `/docs` and `/redoc` endpoints and nullifies `openapi_url` to prevent schema leakage.
+
+5. **FR5: SSEManager + SSEEventStore** — `swx_core.sse.manager.SSEManager` manages channel-based SSE connections with pluggable `SSEEventStore` backends. Ships `RedisSSEEventStore` (multi-worker) and `InMemorySSEEventStore` (single-process ring buffer).
+
+6. **FR6: ConnectionManager** — `swx_core.websocket.connection.ConnectionManager` enforces one active WebSocket connection per key, maintains a 64-message pending queue, and drains queued messages on reconnect.
+
+7. **FR7: SSE↔EventBus Bridge** — `swx_core.sse.bridge.SSEBridge` declaratively bridges `EventBus` events to SSE channels: `sse_bridge.bridge("order.created", "orders")`.
+
+8. **FR8: WebSocket↔EventBus Bridge** — `swx_core.websocket.bridge.WSBridge` declaratively bridges `EventBus` events to WebSocket targets: `ws_bridge.bridge("chat.message", target)`.
+
+9. **FR9: StatsCollector** — `swx_core.observability.stats.StatsCollector` tracks per-channel, per-connection, and per-listener metrics for SSE, WebSocket, and EventBus. Exposes `health_check()` returning a typed dict.
+
+10. **FR10: GracefulShutdown** — `swx_core.lifecycle.graceful_shutdown.GracefulShutdown` orchestrates orderly shutdown: drains in-flight requests, closes SSE/WebSocket connections, cancels background tasks, then stops providers. Wired into `create_swx_app()` via the `graceful_shutdown` parameter.
+
+11. **FR11: CorrelationIdMiddleware** — `swx_core.middleware.correlation_id_middleware.CorrelationIdMiddleware` generates a UUID correlation ID per request, stores it in `scope["state"]["correlation_id"]`, and adds `X-Correlation-ID` to response headers.
+
+12. **FR12: SSE Event Serializer Registry** — `swx_core.sse.serializer.EventSerializerRegistry` allows applications to register custom serializers per event type. `SSEBridge` uses the registry to serialize payloads before broadcasting.
+
+13. **FR13: Background task failure alerts** — `swx_core.background.BackgroundScheduler` now tracks consecutive failures per `ScheduledJob` and emits `AlertEngine` alerts when the count exceeds `alert_threshold` (default 3). Exposes `get_failure_counts()` for monitoring.
+
+14. **FR14: Database pool health check** — `swx_core.routes.utils.health.check_database_pool()` verifies the SQLAlchemy async connection pool is accepting connections.
+
+15. **FR15: Per-route rate limit configuration** — `swx_core.services.rate_limit.per_route.RouteRateLimitConfig` supports exact-path and regex-pattern rate limits. Use the `rate_limit()` FastAPI dependency to enforce per-route limits.
+
+#### Fixed
+
+1. **AuthServiceProvider.boot() RecursionError** — Lazy guard resolution defers `container.make()` until first request, preventing circular dependency during startup.
+
+2. **bootstrap_app() missing middleware** — `bootstrap_app()` now accepts and forwards `register_middleware` to `create_swx_app()`.
+
+3. **RateLimiter KeyError on `window=60`** — `RateLimitMiddleware._normalise_window()` now accepts `int` values and maps them to the correct `RateLimitWindow` enum.
+
+4. **app_factory.py code-clarity** — Extracted `_AsyncTaskService` base, removed broken startup probe, fixed PII encryption body.
 
 ### Version 2.25.2 (2026-09-05)
 

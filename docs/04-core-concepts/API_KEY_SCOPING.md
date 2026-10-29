@@ -1,7 +1,7 @@
 # API Key Scoping
 
-**Version:** 1.0.0  
-**Last Updated:** 2026-07-28
+**Version:** 1.1.0  
+**Last Updated:** 2026-10-04
 
 ---
 
@@ -26,6 +26,9 @@ SwX-API includes fine-grained API key scoping with resource-level permissions, k
 - **Key prefix** — First 8 characters visible for identification without exposing full key
 - **Resource:action scopes** — e.g., `billing:read`, `users:write`, `*:*`
 - **Wildcard `*`** — Grants all actions for a resource or all resources
+- **Enforced scopes** — Guards load key scopes onto the request principal; `require_scope()` enforces them per-route
+- **Test/live environments** — Stripe-style key separation via the `environment` column
+- **Header-only transport** — Keys accepted from `X-API-Key` header by default; query-parameter transport is opt-in
 - **Rate limit overrides** — Per-key rate limits that override plan defaults
 - **Key rotation** — Grace period for old key during rotation
 - **Usage analytics** — Track per-key request counts and last used timestamps
@@ -60,6 +63,7 @@ API_KEY_CACHE_TTL: int = 300
 | `last_used_at` | DateTime | Last usage timestamp |
 | `rate_limit_override` | Integer | Requests per minute override |
 | `metadata_` | JSONB | Key metadata |
+| `environment` | Enum(`test`,`live`) | Key environment, default `live` (Stripe-style test/live separation) |
 
 ### `swx_api_key_scope`
 
@@ -87,6 +91,28 @@ Scopes follow the `resource:action` pattern:
 
 Wildcard `*` in action grants all actions for that resource. Wildcard `*` in resource grants access to all resources.
 
+### Enforcement (request path)
+
+`APIKeyGuard.authenticate()` loads the key's active scopes and maps them onto
+`AuthenticatedUser.permissions` as `resource:action` strings. Enforce per-route with:
+
+```python
+from swx_core.guards.scopes import require_scope, require_any_scope
+
+@router.get("/billing/invoices", dependencies=[Depends(require_scope("billing:read"))])
+async def list_invoices():
+    ...
+
+# Any-of: at least one must match
+@router.post("/billing/invoices", dependencies=[Depends(require_any_scope("billing:write", "billing:admin"))])
+async def create_invoice():
+    ...
+```
+
+A key with **no scopes** can only reach endpoints that require no permission/scope —
+this is the fail-closed default. Scope requirements must be literal `resource:action`
+strings; wildcards are only valid on the granted (stored) side.
+
 ---
 
 ## Key Lifecycle
@@ -99,7 +125,8 @@ from swx_core.models.api_key_scope import ApiKeyCreate
 response = await create_api_key(session, user_id, ApiKeyCreate(
     name="Production API",
     scopes=[{"resource": "billing", "action": "read"}, {"resource": "users", "action": "*"}],
-    rate_limit_override=100
+    rate_limit_override=100,
+    environment="live",  # or "test" — test keys for CI/staging
 ))
 # response.raw_key is the ONLY time the full key is available
 # Store it securely — it cannot be retrieved again
@@ -153,6 +180,19 @@ from swx_core.services.auth.api_key_service import validate_api_key
 key_info = await validate_api_key(session, raw_key)
 # Returns ApiKeyPublic or None if invalid/expired
 ```
+
+---
+
+## Transport Security
+
+API keys are accepted from the `X-API-Key` header only, by default.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `API_KEY_QUERY_PARAM` | *(empty = disabled)* | Opt-in query-parameter transport (`?api_key=...`). Disabled by default because URL-carried credentials leak into access logs, proxies, browser history, and referrer headers. |
+
+Prefer header transport for all new integrations; enable the query parameter
+only for legacy clients that cannot send headers.
 
 ---
 

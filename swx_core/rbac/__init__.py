@@ -11,6 +11,7 @@ Exports:
 
 from swx_core.rbac.helpers import (
     has_permission,
+    has_permission_strict,
     has_role,
     get_user_permissions,
     get_user_roles,
@@ -18,6 +19,7 @@ from swx_core.rbac.helpers import (
 )
 from swx_core.rbac.dependencies import (
     require_permission,
+    require_permission_strict,
     require_role,
     require_team_permission,
 )
@@ -25,12 +27,14 @@ from swx_core.rbac.dependencies import (
 __all__ = [
     # Helpers
     "has_permission",
+    "has_permission_strict",
     "has_role",
     "get_user_permissions",
     "get_user_roles",
     "check_team_permission",
     # Dependencies
     "require_permission",
+    "require_permission_strict",
     "require_role",
     "require_team_permission",
 ]

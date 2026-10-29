@@ -89,8 +89,31 @@ async def get_integrity_report(session: AsyncSession) -> dict[str, object]:
     }
 
 
+async def audit_table_exists(session: AsyncSession) -> bool:
+    """True when swx_audit_log exists in the database.
+
+    Fresh databases (before the first ``alembic upgrade head``) have no
+    audit table; startup integrity must degrade gracefully instead of
+    crash-looping the worker — a restart loop can even SIGKILL in-flight
+    migration jobs. Callers log-and-skip when False.
+    """
+    from sqlalchemy import text
+
+    result = await session.execute(
+        text(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_name = 'swx_audit_log')"
+        )
+    )
+    return bool(result.scalar())
+
+
 async def check_startup_integrity(session: AsyncSession) -> None:
     """Verify audit log chain integrity at application startup (fail-closed)."""
+    if not await audit_table_exists(session):
+        raise LookupError("swx_audit_log table does not exist yet")
+
     result = await get_integrity_report(session)
     if not result["valid"]:
         raise RuntimeError(

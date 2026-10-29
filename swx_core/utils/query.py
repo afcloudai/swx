@@ -12,7 +12,7 @@ from sqlalchemy import select, func, or_, and_, not_
 from sqlalchemy.sql.expression import Select, BinaryExpression
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swx_core.database.db import get_session
+from swx_core.database.db import AsyncSessionLocal
 from swx_core.models.base import Base
 
 
@@ -376,7 +376,7 @@ class QueryBuilder(Generic[ModelType]):
         """
         statement = self._build()
         
-        async with get_session() as session:
+        async with AsyncSessionLocal() as session:
             result = await session.execute(statement)
             return list(result.scalars().all())
     
@@ -389,7 +389,7 @@ class QueryBuilder(Generic[ModelType]):
         """
         statement = self._build().limit(1)
         
-        async with get_session() as session:
+        async with AsyncSessionLocal() as session:
             result = await session.execute(statement)
             return result.scalar_one_or_none()
     
@@ -405,7 +405,7 @@ class QueryBuilder(Generic[ModelType]):
         """
         statement = self._build()
         
-        async with get_session() as session:
+        async with AsyncSessionLocal() as session:
             result = await session.execute(statement)
             return result.scalar_one()
     
@@ -430,7 +430,7 @@ class QueryBuilder(Generic[ModelType]):
         if self._distinct:
             statement = statement.distinct()
         
-        async with get_session() as session:
+        async with AsyncSessionLocal() as session:
             result = await session.execute(statement)
             return result.scalar() or 0
     

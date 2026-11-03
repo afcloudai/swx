@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.31.2] - 2026-10-25
+
+### Fixed
+
+- **Root `alembic.ini`** — wires `alembic -c alembic.ini upgrade head` /
+  `swx db migrate` to the framework-owned chain
+  (`swx_core/template/project/migrations`); the framework repo no longer lacks
+  its own migration surface (reality-check finding).
+- **Refresh-token test fixtures** — the six failing
+  `tests/security/test_refresh_token_service.py` tests were stale, not
+  framework bugs: mocked the wrong repo chain (`scalar_one_or_none` vs the
+  implemented `scalars().first()/all()`) and encoded against the live settings
+  singleton instead of the patched one. Now 12/12 green — no framework change.
+
 ## [2.31.1] - 2026-10-25
 
 ### Fixed

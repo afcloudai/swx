@@ -28,7 +28,7 @@ from swx_core.auth.auth_cache import user_auth_cache
 from swx_core.config.settings import settings
 from swx_core.database.db import SessionDep
 from swx_core.models.user import User
-from swx_core.repositories.user_repository import get_user_by_email
+from swx_core.repositories.user_repository import get_user_by_email, get_user_by_phone
 from swx_core.security.refresh_token_service import verify_mfa_token
 from swx_core.utils.language_helper import translate
 from swx_core.services.alert_engine import alert_engine
@@ -160,8 +160,12 @@ async def get_current_user(
                 set_super_admin(True)
             return user
 
-    # Query user from database (cache miss)
+    # Query user from database (cache miss). D-10: platform tokens may carry
+    # sub = email OR phone — phone-only personas resolve by verified phone
+    # (E.164 subs start with '+').
     user = await get_user_by_email(session=session, email=email)
+    if not user and str(email).startswith("+"):
+        user = await get_user_by_phone(session=session, phone=str(email), verified_only=True)
 
     if not user:
         raise HTTPException(

@@ -9,6 +9,7 @@ Regression tests for the framework reality-check fixes:
 """
 
 import inspect
+import pathlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -113,9 +114,12 @@ class TestAppFactoryWiring:
 
 
 class TestAlembicIniFinding:
-    def test_documented_state(self) -> None:
-        """Root alembic.ini is absent by design (template artifact) until the
-        framework's own migration chain is assembled — tracked, not silently fixed."""
-        import pathlib
+    def test_root_ini_wires_framework_chain(self) -> None:
+        """Fixed: root alembic.ini exists and points at the framework chain."""
+        import configparser
 
-        assert not (pathlib.Path.cwd() / "alembic.ini").exists()
+        ini = pathlib.Path.cwd() / "alembic.ini"
+        assert ini.exists()
+        cp = configparser.ConfigParser()
+        cp.read(ini)
+        assert cp["alembic"]["script_location"] == "swx_core/template/project/migrations"

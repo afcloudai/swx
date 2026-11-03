@@ -11,11 +11,60 @@ import jwt
 import pytest
 
 from swx_core.security.encryption import encrypt_value, decrypt_value, is_encrypted
+from swx_core.utils.time import utc_now
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _patch_refresh_settings() -> tuple:
+    """Patch the CACHED settings singleton (env-dict patches are invisible —
+    settings loads once at import; the tests encode against refresh-secret)."""
+    from swx_core.config.settings import settings
+
+    return (
+        patch.object(settings, "REFRESH_SECRET_KEY", "test-refresh-secret"),
+        patch.object(settings, "PASSWORD_SECURITY_ALGORITHM", "HS256"),
+    )
+
+
+def _create_path_session() -> AsyncMock:
+    """Session mock matching the create path: count_active_sessions → scalar()=0,
+    find_token_by_email → scalars().first() → None."""
+    session = AsyncMock()
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+    find_result = MagicMock()
+    find_result.scalars.return_value.first.return_value = None
+    session.execute = AsyncMock(side_effect=[count_result, find_result])
+    return session
+
+
+def _db_token_row(token_value: str, expires_days: int = 7):
+    row = MagicMock()
+    row.token = token_value
+    row.expires_at = utc_now() + timedelta(days=expires_days)
+    return row
+
+
+def _session_chain_first(row) -> AsyncMock:
+    """find_token_by_email chain: execute → scalars() → first() → row."""
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = row
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+def _session_chain_all(rows: list) -> AsyncMock:
+    """find_all_tokens_by_email chain: execute → scalars() → all() → rows."""
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = rows
+    session.execute = AsyncMock(return_value=result)
+    return session
+
 
 def _make_master_key() -> str:
     """Generate a random 32-byte master key for testing."""
@@ -107,10 +156,7 @@ class TestCreateRefreshTokenEncryption:
         from swx_core.security.refresh_token_service import create_refresh_token
         from swx_core.models.refresh_token import RefreshToken
 
-        mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.scalar_one_or_none.return_value = None  # No existing token
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session = _create_path_session()
 
         encryption_key = _make_master_key()
 
@@ -122,11 +168,13 @@ class TestCreateRefreshTokenEncryption:
             import swx_core.security.encryption as enc_mod
             enc_mod._encryption_service = None
 
-            token = await create_refresh_token(
-                mock_session,
-                email="user@example.com",
-                expires_delta=timedelta(days=7),
-            )
+            settings_patches = _patch_refresh_settings()
+            with settings_patches[0], settings_patches[1]:
+                token = await create_refresh_token(
+                    mock_session,
+                    email="user@example.com",
+                    expires_delta=timedelta(days=7),
+                )
 
             # The JWT token was returned (plaintext)
             assert token is not None
@@ -147,10 +195,7 @@ class TestCreateRefreshTokenEncryption:
         from swx_core.security.refresh_token_service import create_refresh_token
         from swx_core.models.refresh_token import RefreshToken
 
-        mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session = _create_path_session()
 
         encryption_key = _make_master_key()
 
@@ -162,19 +207,21 @@ class TestCreateRefreshTokenEncryption:
             import swx_core.security.encryption as enc_mod
             enc_mod._encryption_service = None
 
-            token = await create_refresh_token(
-                mock_session,
-                email="user@example.com",
-                expires_delta=timedelta(days=7),
-            )
+            settings_patches = _patch_refresh_settings()
+            with settings_patches[0], settings_patches[1]:
+                token = await create_refresh_token(
+                    mock_session,
+                    email="user@example.com",
+                    expires_delta=timedelta(days=7),
+                )
 
-            # Verify the returned JWT is valid
-            payload = jwt.decode(
-                token,
-                "test-refresh-secret",
-                algorithms=["HS256"],
-            )
-            assert payload["sub"] == "user@example.com"
+                # Verify the returned JWT is valid
+                payload = jwt.decode(
+                    token,
+                    "test-refresh-secret",
+                    algorithms=["HS256"],
+                )
+                assert payload["sub"] == "user@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -201,29 +248,21 @@ class TestVerifyRefreshTokenDecryption:
             import swx_core.security.encryption as enc_mod
             enc_mod._encryption_service = None
 
-            # Create a JWT token
-            encoded_jwt = jwt.encode(
-                {"exp": (utc_now() + timedelta(days=7)).timestamp(), "sub": "user@example.com", "auth_provider": "local"},
-                "test-refresh-secret",
-                algorithm="HS256",
-            )
+            settings_patches = _patch_refresh_settings()
+            with settings_patches[0], settings_patches[1]:
+                encoded_jwt = jwt.encode(
+                    {"exp": (utc_now() + timedelta(days=7)).timestamp(), "sub": "user@example.com", "auth_provider": "local"},
+                    "test-refresh-secret",
+                    algorithm="HS256",
+                )
 
-            # Encrypt it for storage
-            encrypted = encrypt_value(encoded_jwt)
+                encrypted = encrypt_value(encoded_jwt)
 
-            # Mock the DB returning the encrypted token
-            mock_token = MagicMock()
-            mock_token.token = encrypted
-            mock_token.expires_at = utc_now() + timedelta(days=7)
+                mock_token = _db_token_row(encrypted)
+                mock_session = _session_chain_first(mock_token)
+                mock_request = MagicMock()
 
-            mock_session = AsyncMock()
-            mock_result = AsyncMock()
-            mock_result.scalar_one_or_none.return_value = mock_token
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            mock_request = MagicMock()
-
-            result = await verify_refresh_token(mock_session, encoded_jwt, mock_request)
+                result = await verify_refresh_token(mock_session, encoded_jwt, mock_request)
             assert result is not None
             assert result[0] == "user@example.com"
             assert result[1] == "local"
@@ -240,21 +279,12 @@ class TestVerifyRefreshTokenDecryption:
             algorithm="HS256",
         )
 
-        mock_token = MagicMock()
-        mock_token.token = encoded_jwt  # plaintext, not encrypted
-        mock_token.expires_at = utc_now() + timedelta(days=7)
-
-        mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.scalar_one_or_none.return_value = mock_token
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
+        mock_token = _db_token_row(encoded_jwt)
+        mock_session = _session_chain_first(mock_token)
         mock_request = MagicMock()
 
-        with patch.dict(os.environ, {
-            "REFRESH_SECRET_KEY": "test-refresh-secret",
-            "PASSWORD_SECURITY_ALGORITHM": "HS256",
-        }):
+        settings_patches = _patch_refresh_settings()
+        with settings_patches[0], settings_patches[1]:
             result = await verify_refresh_token(mock_session, encoded_jwt, mock_request)
             assert result is not None
             assert result[0] == "plain@example.com"
@@ -283,23 +313,19 @@ class TestRevokeRefreshTokenDecryption:
             import swx_core.security.encryption as enc_mod
             enc_mod._encryption_service = None
 
-            encoded_jwt = jwt.encode(
-                {"exp": (utc_now() + timedelta(days=7)).timestamp(), "sub": "revoke@example.com", "auth_provider": "local"},
-                "test-refresh-secret",
-                algorithm="HS256",
-            )
+            settings_patches = _patch_refresh_settings()
+            with settings_patches[0], settings_patches[1]:
+                encoded_jwt = jwt.encode(
+                    {"exp": (utc_now() + timedelta(days=7)).timestamp(), "sub": "revoke@example.com", "auth_provider": "local"},
+                    "test-refresh-secret",
+                    algorithm="HS256",
+                )
 
-            encrypted = encrypt_value(encoded_jwt)
+                encrypted = encrypt_value(encoded_jwt)
+                mock_token = _db_token_row(encrypted)
+                mock_session = _session_chain_all([mock_token])
 
-            mock_token = MagicMock()
-            mock_token.token = encrypted
-
-            mock_session = AsyncMock()
-            mock_result = AsyncMock()
-            mock_result.scalar_one_or_none.return_value = mock_token
-            mock_session.execute = AsyncMock(return_value=mock_result)
-
-            result = await revoke_refresh_token(mock_session, encoded_jwt)
+                result = await revoke_refresh_token(mock_session, encoded_jwt)
             assert result is True
 
     @pytest.mark.asyncio
@@ -314,18 +340,10 @@ class TestRevokeRefreshTokenDecryption:
             algorithm="HS256",
         )
 
-        # Token stored as plaintext
-        mock_token = MagicMock()
-        mock_token.token = encoded_jwt
+        mock_token = _db_token_row(encoded_jwt)
+        mock_session = _session_chain_all([mock_token])
 
-        mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.scalar_one_or_none.return_value = mock_token
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        with patch.dict(os.environ, {
-            "REFRESH_SECRET_KEY": "test-refresh-secret",
-            "PASSWORD_SECURITY_ALGORITHM": "HS256",
-        }):
+        settings_patches = _patch_refresh_settings()
+        with settings_patches[0], settings_patches[1]:
             result = await revoke_refresh_token(mock_session, encoded_jwt)
             assert result is True

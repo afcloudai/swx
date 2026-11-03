@@ -58,6 +58,10 @@ class TenantAwareController(
         
         if service is None:
             self.service = BaseService(self.repository)
+        else:
+            # Split-brain fix: an injected service keeps its non-tenant
+            # repository, so list/create silently bypassed tenant scoping.
+            service.repository = self.repository
     
     def _inject_tenant_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         result = data.copy()
@@ -112,9 +116,12 @@ class TenantAwareController(
         
         items = [self.schema_public.model_validate(item) for item in items]
         
-        return PaginatedResponse(
-            items=items,
-            total=len(items),
-            page=(skip // limit) + 1 if limit > 0 else 1,
+        total = await self.repository.count()
+        page = (skip // limit) + 1 if limit > 0 else 1
+        
+        return PaginatedResponse.create(
+            data=items,
+            total=total,
+            page=page,
             per_page=limit,
         )

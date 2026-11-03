@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.32.0] - 2026-10-25
+
+### Added (D-10 — phone-first platform sessions)
+
+- **Phone/password login** — `POST /auth/phone/login`: password authentication keyed by a VERIFIED
+  phone (ambiguity fail-closed); full lockout/inactive/MFA parity with email login
+  (`POST /auth/phone/login` response contract identical, including the MFA challenge flow).
+- **Email-or-phone subjects (D-10)** — platform tokens mint `sub = user.email or user.phone`;
+  `get_current_user` resolves both subject kinds (E.164 subs fall back to a verified-phone
+  lookup); social-login completion does the same — **phone-only personas now obtain platform
+  sessions** (previously `phone_only_login_pending`).
+- **Email transport de-stub (v2.32)** — `NotificationsEmailOtpChannel` shipped and registered as
+  `notifications`: routes dual-OTP email through the REAL notification stack
+  (`send_via_email` — SMTP/SendGrid providers, circuit breakers, delivery tracking).
+  `SWX_EMAIL_OTP_CHANNEL=notifications` selects it; the LoggingChannel default remains for dev.
+- `user_repository.get_user_by_phone` (verified-only, ambiguity fail-closed).
+
 ## [2.31.2] - 2026-10-25
 
 ### Fixed

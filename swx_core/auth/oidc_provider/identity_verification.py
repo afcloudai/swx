@@ -53,9 +53,34 @@ class LoggingEmailOtpChannel:
 _EMAIL_CHANNELS: dict[str, EmailOtpChannel] = {}
 
 
+class NotificationsEmailOtpChannel:
+    """Email transport through the real notification stack
+    (SMTP/SendGrid providers resolved from DB config via ``send_via_email``).
+    Selected with ``SWX_EMAIL_OTP_CHANNEL=notifications`` — v2.31.1 email-send
+    de-stub for the dual-OTP gate's email leg.
+    """
+
+    async def send_verification_code(self, *, email: str, code: str) -> None:
+        from swx_core.database.db import async_session
+        from swx_core.services.notifications.provider_factory import send_via_email
+
+        notification = {
+            "type": "identity.verification",
+            "channel": "email",
+            "recipient": email,
+            "subject": "Your verification code",
+            "body": f"Your verification code is {code}. It expires shortly.",
+        }
+        async with async_session() as session:
+            await send_via_email(session, notification)
+
+
 def register_email_channel(name: str, channel: EmailOtpChannel) -> None:
     """Register a named email-OTP delivery channel (idempotent last-write-wins)."""
     _EMAIL_CHANNELS[name] = channel
+
+
+register_email_channel("notifications", NotificationsEmailOtpChannel())
 
 
 def resolve_email_channel() -> EmailOtpChannel:

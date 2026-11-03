@@ -33,6 +33,7 @@ from swx_core.models.token import Token, TokenRefreshRequest, LoginResponse
 from swx_core.repositories.user_repository import (
     create_user,
     get_user_by_email,
+    get_user_by_phone,
     increment_failed_login_attempts,
     lock_user_account,
     reset_login_attempts,
@@ -333,6 +334,8 @@ async def login_social_user_service(
     """
     user = await get_user_by_email(session=session, email=user_email)
     if not user:
+        user = await get_user_by_phone(session=session, phone=user_email, verified_only=True)
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     # AUTH-005: Deactivated users must not authenticate via social login
@@ -346,14 +349,18 @@ async def login_social_user_service(
     access_token_expires = await get_token_expiration(session, "access")
     refresh_token_expires = await get_token_expiration(session, "refresh")
     billing_plan = await get_user_plan_key(session, user.id)
+    subject = user.email or user.phone
+    if not subject:
+        raise HTTPException(status_code=400, detail="User has no login identity subjects")
+
     access_token = create_access_token(
-        user_email,
+        subject,
         expires_delta=access_token_expires,
         scopes=scopes or None,
         billing_plan=billing_plan,
     )
     refresh_token = await create_refresh_token(
-        session, user_email, expires_delta=refresh_token_expires
+        session, subject, expires_delta=refresh_token_expires
     )
 
     from swx_core.events.dispatcher import event_bus
@@ -788,3 +795,144 @@ async def reset_password_service(
     )
 
     return Message(message=translate(request, "password_reset_successful"))
+
+
+async def login_phone_user_service(
+    session: AsyncSession,
+    phone: str,
+    password: str,
+    request: Request = None,  # pyright: ignore[reportArgumentType]
+) -> LoginResponse:
+    """
+    Phone-first login: password authentication keyed by a VERIFIED phone.
+
+    Mirrors :func:`login_user_service` (lockout, inactive, MFA, lockout
+    increments) but resolves the identity by verified phone and mints the
+    platform session for email-less personas with ``sub = phone`` (D-10).
+    Users with an email keep ``sub = email``.
+    """
+    existing_user = await get_user_by_phone(session=session, phone=phone, verified_only=True)
+    if not existing_user:
+        audit = AuditLogger(session)
+        await audit.log_event(
+            action=AuditAction.AUTH_LOGIN_FAILURE,
+            actor_type=ActorType.USER,
+            context={"phone": phone, "reason": "invalid_or_unverified_phone"},
+            outcome=AuditOutcome.FAILURE,
+            request=request,
+        )
+        raise HTTPException(status_code=400, detail=translate(request, "incorrect_email_or_password"))
+
+    from swx_core.config.settings import settings
+    lockout_threshold = settings.ACCOUNT_LOCKOUT_THRESHOLD
+    if lockout_threshold > 0 and existing_user.locked_until and existing_user.locked_until > datetime.now(timezone.utc):
+        audit = AuditLogger(session)
+        await audit.log_event(
+            action=AuditAction.AUTH_LOGIN_FAILURE,
+            actor_type=ActorType.USER,
+            actor_id=str(existing_user.id),
+            context={"reason": "account_locked", "locked_until": existing_user.locked_until.isoformat()},
+            outcome=AuditOutcome.FAILURE,
+            request=request,
+        )
+        raise HTTPException(status_code=423, detail=translate(request, "account_locked"))
+
+    if not existing_user.is_active:
+        audit = AuditLogger(session)
+        await audit.log_event(
+            action=AuditAction.AUTH_LOGIN_FAILURE,
+            actor_type=ActorType.USER,
+            actor_id=str(existing_user.id),
+            context={"reason": "inactive_account"},
+            outcome=AuditOutcome.FAILURE,
+            request=request,
+        )
+        raise HTTPException(status_code=400, detail=translate(request, "inactive_user"))
+
+    if not existing_user.hashed_password or not await verify_password(password, existing_user.hashed_password):
+        if lockout_threshold > 0:
+            await increment_failed_login_attempts(session, existing_user)
+            if (existing_user.failed_login_attempts or 0) >= lockout_threshold:
+                locked_until = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCOUNT_LOCKOUT_DURATION_MINUTES)
+                await lock_user_account(session, existing_user, locked_until)
+                lockout_audit = AuditLogger(session)
+                await lockout_audit.log_event(
+                    action=AuditAction.AUTH_ACCOUNT_LOCKED,
+                    actor_type=ActorType.SYSTEM,
+                    actor_id=str(existing_user.id),
+                    resource_type="user",
+                    resource_id=str(existing_user.id),
+                    outcome=AuditOutcome.SUCCESS,
+                    context={"failed_attempts": existing_user.failed_login_attempts},
+                    request=request,
+                )
+
+        audit = AuditLogger(session)
+        await audit.log_event(
+            action=AuditAction.AUTH_LOGIN_FAILURE,
+            actor_type=ActorType.USER,
+            actor_id=str(existing_user.id),
+            context={"reason": "invalid_credentials", "failed_attempts": existing_user.failed_login_attempts},
+            outcome=AuditOutcome.FAILURE,
+            request=request,
+        )
+        raise HTTPException(status_code=400, detail=translate(request, "incorrect_email_or_password"))
+
+    subject = existing_user.email or existing_user.phone
+
+    if existing_user.mfa_enabled:
+        from swx_core.config.settings import settings
+        from swx_core.events.dispatcher import event_bus
+        mfa_token = create_mfa_token(
+            email=subject,
+            user_id=str(existing_user.id),
+            expires_delta=timedelta(minutes=settings.MFA_CHALLENGE_EXPIRE_MINUTES),
+        )
+        await event_bus.dispatch(
+            "user.login.mfa_required",
+            payload={"user_id": str(existing_user.id), "subject": subject},
+        )
+        return LoginResponse(mfa_required=True, mfa_token=mfa_token, access_token=None, refresh_token=None)
+
+    permissions = await get_user_permissions(session, existing_user.id, domain="user")
+    scopes = [p.name for p in permissions] if permissions else []
+
+    from swx_core.services.settings_helper import get_token_expiration
+    access_token_expires = await get_token_expiration(session, "access")
+    refresh_token_expires = await get_token_expiration(session, "refresh")
+    billing_plan = await get_user_plan_key(session, existing_user.id)
+    access_token = create_access_token(
+        subject,
+        expires_delta=access_token_expires,
+        scopes=scopes or None,
+        billing_plan=billing_plan,
+    )
+    refresh_token = await create_refresh_token(session, subject, expires_delta=refresh_token_expires)
+
+    from swx_core.events.dispatcher import event_bus
+    await event_bus.dispatch(
+        "user.login",
+        payload={"user_id": str(existing_user.id), "subject": subject, "auth_method": "phone"},
+    )
+
+    if existing_user.failed_login_attempts or existing_user.locked_until:
+        await reset_login_attempts(session, existing_user)
+
+    audit = AuditLogger(session)
+    await audit.log_event(
+        action=AuditAction.AUTH_LOGIN_SUCCESS,
+        actor_type=ActorType.USER,
+        actor_id=str(existing_user.id),
+        resource_type="user",
+        resource_id=str(existing_user.id),
+        outcome=AuditOutcome.SUCCESS,
+        context={"auth_method": "phone_password", "subject": subject},
+        request=request,
+    )
+
+    return LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        mfa_required=False,
+    )

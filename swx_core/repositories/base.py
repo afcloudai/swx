@@ -576,7 +576,7 @@ class BaseRepository(Generic[ModelType]):
     # Utility Methods
     # =========================================================================
 
-    async def exists_by(**filters: Dict[str, Any]) -> bool:
+    async def exists_by(self, **filters: Dict[str, Any]) -> bool:
         """
         Check if records matching filters exist.
 

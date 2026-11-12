@@ -19,6 +19,21 @@ All notable changes to this project will be documented in this file.
   `SWX_EMAIL_OTP_CHANNEL=notifications` selects it; the LoggingChannel default remains for dev.
 - `user_repository.get_user_by_phone` (verified-only, ambiguity fail-closed).
 
+## [2.33.2] - 2026-11-03
+
+### Fixed (list-envelope double-unwrap — the real CLI crash)
+
+- **`list_plans` / `list_subscriptions` double-unwrap** — `Provider._request`
+  already unwraps Paystack's envelope (list endpoints return a LIST), but both
+  list methods called `.get("data")` on it → `'list' object has no attribute
+  'get'` against the real API (the exact CLI crash in AFBiz's
+  `ensure_paystack_plan` reuse scan; exit 2, zero rows, nothing cached).
+  Shape-tolerant now: unwrapped list (authoritative), dict envelope
+  (defensive), non-list garbage → `[]`. Root cause verified wheel-level
+  (2.32.0's provider is 83 lines/old; 2.33.0 ships the methods but with the
+  latent double-unwrap). Envelope-shape regression tests added for both
+  methods (unwrapped list + dict + empty).
+
 ## [2.33.1] - 2026-11-03
 
 ### Fixed (P2 completion — wiring + reconciliation)

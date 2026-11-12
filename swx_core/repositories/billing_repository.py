@@ -131,6 +131,18 @@ async def get_billing_account_by_stripe_customer(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+
+async def get_billing_account_by_paystack_customer(
+    session: AsyncSession, paystack_customer_code: str
+) -> Optional[BillingAccount]:
+    stmt = select(BillingAccount).where(
+        BillingAccount.paystack_customer_code == paystack_customer_code
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+
 async def get_plan_by_stripe_price_id(
     session: AsyncSession, stripe_price_id: str
 ) -> Optional[Plan]:
@@ -156,3 +168,17 @@ async def get_active_subscriptions_for_update(
     ).with_for_update()
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+async def get_subscription_by_id(
+    session: AsyncSession, subscription_id: UUID
+) -> Optional[Subscription]:
+    return await session.get(Subscription, subscription_id)
+
+async def get_subscription_by_paystack_code(
+    session: AsyncSession, paystack_subscription_code: str
+) -> Optional[Subscription]:
+    stmt = select(Subscription).where(
+        Subscription.paystack_subscription_code == paystack_subscription_code
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()

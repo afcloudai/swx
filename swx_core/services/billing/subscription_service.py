@@ -394,6 +394,87 @@ class SubscriptionService:
             stripe_data, stripe_id, status, period_start, period_end, cancel_at_period_end, stripe_price_id
         )
 
+    async def sync_paystack_subscription(self, prov_status: dict[str, object]) -> uuid.UUID | None:
+        """
+        Map a Paystack subscription/invoice payload onto the internal Subscription.
+
+        Provider statuses → internal SubscriptionStatus:
+            active            → ACTIVE
+            non-renewing      → CANCELING (cancel_at_period_end=True)
+            attention         → PAST_DUE + grace machinery (handle_renewal_failure)
+            completed/cancelled → CANCELED (ended_at=now)
+
+        The dormant grace machinery finally has callers:
+            attention/payment_failed → handle_renewal_failure()
+            expired grace           → expire_grace()
+        Returns the synced subscription id, or None when no local subscription matched.
+        """
+        logger.info("sync_paystack_subscription: syncing provider payload")
+        subscription_code = prov_status.get("subscription_code")
+        if not isinstance(subscription_code, str) or not subscription_code:
+            logger.warning("sync_paystack_subscription: payload has no subscription_code; skipping")
+            return None
+
+        sub = await billing_repository.get_subscription_by_paystack_code(self.session, subscription_code)
+        if sub is None:
+            logger.info("sync_paystack_subscription: no local subscription for %s", subscription_code)
+            return None
+
+        provider_status = str(prov_status.get("status", "active")).casefold()
+        next_payment = prov_status.get("next_payment_date")
+
+        if provider_status == "active":
+            return sub.id
+
+        if provider_status == "non-renewing":
+            sub.cancel_at_period_end = True
+            self.session.add(sub)
+            await self._commit_or_rollback(sub, f"paystack non-renew sync for {subscription_code}")
+            await get_audit_logger(self.session).log_event(
+                action="subscription.paystack_not_renewing",
+                actor_type=ActorType.SYSTEM,
+                resource_type="subscription",
+                resource_id=str(sub.id),
+                outcome=AuditOutcome.SUCCESS,
+                context={"subscription_code": subscription_code},
+            )
+            return sub.id
+
+        if provider_status == "attention":
+            grace = await self.handle_renewal_failure(sub.id)
+            await get_audit_logger(self.session).log_event(
+                action="subscription.paystack_attention",
+                actor_type=ActorType.SYSTEM,
+                resource_type="subscription",
+                resource_id=str(sub.id),
+                outcome=AuditOutcome.SUCCESS,
+                context={"subscription_code": subscription_code,
+                         "grace_ends_at": grace.grace_period_ends_at.isoformat() if grace.grace_period_ends_at else None},
+            )
+            return sub.id
+
+        if provider_status in ("completed", "cancelled"):
+            sub.status = SubscriptionStatus.CANCELED
+            sub.ended_at = utc_now()
+            self.session.add(sub)
+            await self._commit_or_rollback(sub, f"paystack terminal sync for {subscription_code}")
+            await get_audit_logger(self.session).log_event(
+                action="subscription.paystack_completed",
+                actor_type=ActorType.SYSTEM,
+                resource_type="subscription",
+                resource_id=str(sub.id),
+                outcome=AuditOutcome.SUCCESS,
+                context={"subscription_code": subscription_code, "provider_status": provider_status},
+            )
+            return sub.id
+
+        if provider_status == "expired":
+            await self.expire_grace(sub.id)
+            return sub.id
+
+        logger.warning("sync_paystack_subscription: unknown provider status %r for %s", provider_status, subscription_code)
+        return None
+
     async def get_active_subscription(self, account_id: uuid.UUID) -> Optional[Subscription]:
         return await billing_repository.get_active_subscription(self.session, account_id)
 

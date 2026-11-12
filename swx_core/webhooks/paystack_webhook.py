@@ -26,6 +26,7 @@ from swx_core.config.settings import settings
 from swx_core.database.db import AsyncSessionLocal
 from swx_core.middleware.logging_middleware import logger
 from swx_core.models.billing import BillingAccountType
+from swx_core.repositories.user_repository import get_user_by_id
 from swx_core.services.billing.payment_confirmation_service import (
     apply_payment,
     find_user_by_email,
@@ -36,7 +37,7 @@ from swx_core.utils.currency import kobo_to_nano
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-_SUPPORTED_EVENTS = {"charge.success"}
+
 
 
 @dataclass
@@ -68,10 +69,26 @@ def _extract_payload_fields(data: dict[str, Any]) -> tuple[str, int, str, str, s
     return reference, amount_kobo, email, currency, status_value
 
 
+_SUPPORTED_EVENTS = {
+    "charge.success",
+    # Recurring lifecycle (v2.33) — literal spellings from Paystack's docs;
+    # validated by test_paystack_webhook_events.py::test_event_spellings
+    "subscription.create",
+    "subscription.not_renew",     # cancel not to renew on next payment date
+    "subscription.disable",       # cancelled OR completed (payload status tells which)
+    "invoice.create",
+    "invoice.update",
+    "invoice.payment_failed",
+}
+
+
 class PaystackWebhookHandler:
-    def __init__(self, secret_key: str, redis_client=None):
+    def __init__(self, secret_key: str, redis_client=None, session_factory=None):
         self.secret_key = secret_key
         self.redis = redis_client
+        # Durable idempotency (v2.33): Redis is a fast-path cache only — the
+        # swx_inbound_webhook_delivery table survives restarts (P2/11).
+        self.session_factory = session_factory
 
     async def handle(self, payload: bytes, signature: str) -> PaystackWebhookResult:
         if not signature:
@@ -118,7 +135,23 @@ class PaystackWebhookHandler:
                 message=f"Payment status {paystack_status}",
             )
 
-        if self.redis is not None:
+        event_id = str(event.get("id", reference))
+        if self.session_factory is not None:
+            async with self.session_factory() as db_session:
+                from swx_core.services.webhook_idempotency_service import (
+                    check_and_record,
+                )
+
+                is_new = await check_and_record(
+                    db_session, "paystack", event_id, payload, redis_client=self.redis,
+                )
+                if not is_new:
+                    logger.info("Paystack webhook: duplicate event %s", event_id)
+                    return PaystackWebhookResult(
+                        status="duplicate", reference=reference, event_type=event_type,
+                        message="Already processed",
+                    )
+        elif self.redis is not None:
             dedup_key = f"webhook:paystack:idempotency:{reference}"
             if await self.redis.exists(dedup_key):
                 logger.info("Paystack webhook: duplicate reference %s", reference)
@@ -132,9 +165,23 @@ class PaystackWebhookHandler:
 
         try:
             async with AsyncSessionLocal() as session:
-                user = await find_user_by_email(session, email)
+                # P2/13: resolve by customer_code first (email is mutable in our
+                # books and immutable in theirs — never the join key).
+                from swx_core.services.billing import billing_repository
+
+                customer_code = data.get("customer")
+                user = None
+                if isinstance(customer_code, str) and customer_code:
+                    account = await billing_repository.get_billing_account_by_paystack_customer(
+                        session, customer_code
+                    )
+                    if account is not None:
+                        user = await get_user_by_id(session=session, user_id=account.owner_id)
+                if user is None and email:
+                    user = await find_user_by_email(session, email)  # FALLBACK ONLY
                 if user is None:
-                    logger.warning("Paystack webhook: no user for email %s", email)
+                    logger.warning("Paystack webhook: no user for customer_code %s or email %s",
+                                   customer_code, email)
                     return PaystackWebhookResult(
                         status="error", reference=reference, event_type=event_type,
                         message="User not found",

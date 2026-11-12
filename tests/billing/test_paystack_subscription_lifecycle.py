@@ -80,6 +80,17 @@ class TestPlanMethods:
         assert body["amount"] == 45000
         assert "name" not in body  # passthrough only sends provided params
 
+    async def test_list_plans_accepts_unwrapped_list_envelope(self) -> None:
+        """Regression (v2.33.1): _request unwraps the envelope → list endpoints
+        receive a LIST; the double-unwrap crashed 'list' has no attribute 'get'
+        against the real API."""
+        prov = _provider()
+        unwrapped = [{"id": 1, "plan_code": "PLN_a"}, {"id": 2, "plan_code": "PLN_b"}]
+        _request_of(prov).return_value = unwrapped
+        plans = await prov.list_plans()
+
+        assert [p["plan_code"] for p in plans] == ["PLN_a", "PLN_b"]
+
     async def test_update_plan_full_passthrough(self) -> None:
         prov = _provider()
         await prov.update_plan(
@@ -136,6 +147,36 @@ class TestSubscriptionMethods:
         assert query is not None
         assert query["customer"] == 1173 and query["plan"] == 28
         assert query["perPage"] == 10 and query["page"] == 2
+
+    async def test_list_plans_accepts_unwrapped_list_envelope(self) -> None:
+        """Regression (v2.33.1): _request unwraps the envelope → list endpoints
+        receive a LIST; the double-unwrap crashed with 'list' has no attribute
+        'get' against the real API."""
+        prov = _provider()
+        unwrapped = [{"id": 1, "plan_code": "PLN_a"}, {"id": 2, "plan_code": "PLN_b"}]
+        _request_of(prov).return_value = unwrapped
+        plans = await prov.list_plans()
+
+        assert [p["plan_code"] for p in plans] == ["PLN_a", "PLN_b"]
+
+    async def test_list_plans_accepts_dict_envelope_defensively(self) -> None:
+        prov = _provider()
+        _request_of(prov).return_value = {
+            "status": True, "message": "Plans retrieved",
+            "data": [{"id": 1, "plan_code": "PLN_a"}],
+        }
+        plans = await prov.list_plans()
+
+        assert [p["plan_code"] for p in plans] == ["PLN_a"]
+
+    async def test_list_subscriptions_accepts_unwrapped_list_envelope(self) -> None:
+        """Regression (v2.33.1): same double-unwrap crash on the subscription list."""
+        prov = _provider()
+        unwrapped = [{"subscription_code": "SUB_1", "status": "active"}]
+        _request_of(prov).return_value = unwrapped
+        subs = await prov.list_subscriptions(customer=1173)
+
+        assert subs[0]["subscription_code"] == "SUB_1"
 
     async def test_enable_body_is_code_and_token_only(self) -> None:
         """The OpenAPI spec's stray required authorization field is a spec bug —

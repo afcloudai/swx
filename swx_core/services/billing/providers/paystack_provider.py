@@ -77,8 +77,11 @@ class PaystackProvider(LocalPaymentProvider):
 
     async def list_plans(self, per_page: int = 50) -> list[dict[str, object]]:
         data = await self._request("GET", f"/plan?perPage={per_page}")
-        plans = data.get("data")
-        return plans if isinstance(plans, list) else []
+        # _request already unwraps Paystack's envelope → list endpoints return a
+        # LIST. Shape tolerance: accept the unwrapped list (authoritative), plus
+        # a dict envelope defensively.
+        items = data if isinstance(data, list) else ((data.get("data") if isinstance(data, dict) else None) or [])
+        return [p for p in items if isinstance(p, dict)]
 
     async def create_plan(self, name: str, amount_kobo: int, interval: str = "monthly") -> dict[str, object]:
         data = await self._request("POST", "/plan", {
@@ -178,8 +181,8 @@ class PaystackProvider(LocalPaymentProvider):
         if plan is not None:
             query["plan"] = plan
         data = await self._request("GET", "/subscription", query)
-        subscriptions = data.get("data")
-        return subscriptions if isinstance(subscriptions, list) else []
+        items = data if isinstance(data, list) else ((data.get("data") if isinstance(data, dict) else None) or [])
+        return [p for p in items if isinstance(p, dict)]
 
     async def create_subscription(
         self,

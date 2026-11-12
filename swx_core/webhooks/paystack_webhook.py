@@ -32,6 +32,9 @@ from swx_core.services.billing.payment_confirmation_service import (
     find_user_by_email,
     parse_reference_prefix,
 )
+from swx_core.repositories.billing_repository import (
+    get_billing_account_by_paystack_customer,
+)
 from swx_core.services.billing.subscription_service import SubscriptionService
 from swx_core.utils.currency import kobo_to_nano
 
@@ -53,11 +56,19 @@ def _verify_signature(payload: bytes, signature: str, secret: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def _extract_payload_fields(data: dict[str, Any]) -> tuple[str, int, str, str, str] | None:
+def _extract_payload_fields(data: dict[str, Any]) -> tuple[str, int, str, str, str, str] | None:
+    """Returns (reference, amount_kobo, email, currency, status, customer_code)."""
     reference = data.get("reference")
     amount_kobo = data.get("amount")
     customer = data.get("customer")
     email = customer.get("email") if isinstance(customer, dict) else None
+    # Paystack customer object in charge events carries `customer_code`; string
+    # customer fields (subscription payloads) carry the code directly.
+    customer_code = (
+        customer.get("customer_code") if isinstance(customer, dict)
+        else customer if isinstance(customer, str)
+        else None
+    )
     currency = data.get("currency", settings.DEFAULT_BASE_CURRENCY)
     status_value = data.get("status", "")
 
@@ -66,7 +77,7 @@ def _extract_payload_fields(data: dict[str, Any]) -> tuple[str, int, str, str, s
     if not isinstance(email, str) or not email:
         return None
 
-    return reference, amount_kobo, email, currency, status_value
+    return reference, amount_kobo, email, currency, status_value, customer_code or ""
 
 
 _SUPPORTED_EVENTS = {
@@ -126,7 +137,7 @@ class PaystackWebhookHandler:
             logger.warning("Paystack webhook: could not extract fields from data")
             return PaystackWebhookResult(status="error", event_type=event_type, message="Missing required fields")
 
-        reference, amount_kobo, email, currency, paystack_status = fields
+        reference, amount_kobo, email, currency, paystack_status, customer_code = fields
 
         if paystack_status != "success":
             logger.info("Paystack webhook: reference %s status %s, skipping", reference, paystack_status)
@@ -167,12 +178,9 @@ class PaystackWebhookHandler:
             async with AsyncSessionLocal() as session:
                 # P2/13: resolve by customer_code first (email is mutable in our
                 # books and immutable in theirs — never the join key).
-                from swx_core.services.billing import billing_repository
-
-                customer_code = data.get("customer")
                 user = None
-                if isinstance(customer_code, str) and customer_code:
-                    account = await billing_repository.get_billing_account_by_paystack_customer(
+                if customer_code:
+                    account = await get_billing_account_by_paystack_customer(
                         session, customer_code
                     )
                     if account is not None:

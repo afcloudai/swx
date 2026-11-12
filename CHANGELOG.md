@@ -19,6 +19,20 @@ All notable changes to this project will be documented in this file.
   `SWX_EMAIL_OTP_CHANNEL=notifications` selects it; the LoggingChannel default remains for dev.
 - `user_repository.get_user_by_phone` (verified-only, ambiguity fail-closed).
 
+## [2.33.1] - 2026-11-03
+
+### Fixed (P2 completion — wiring + reconciliation)
+
+- **Subscription-event sync wiring** — `subscription.create/not_renew/disable` +
+  `invoice.payment_failed` now actually call `sync_paystack_subscription` (the
+  lifecycle method shipped in 2.33.0 but had zero callers); terminal
+  `completed`/`cancelled` ambiguity mapped per Paystack docs.
+- **Admin reconciliation endpoints (P2/14)** — `POST /admin/billing/plan/paystack/
+  transactions/{reference}/verify` (pull-verify) +
+  `POST /admin/billing/plan/paystack/subscriptions/{code}/refresh` (pull + sync) —
+  `AdminUserDep`-guarded, audited, rate-limited (missed-webhook recovery).
+- Tests: webhook sync wiring + reconciliation (6/6 green), full suite 307+.
+
 ## [2.33.0] - 2026-11-03
 
 ### Added (P0–P4 — Paystack subscription lifecycle, AFBiz reality-check handoff)

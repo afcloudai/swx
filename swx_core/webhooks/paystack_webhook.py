@@ -93,6 +93,64 @@ _SUPPORTED_EVENTS = {
 }
 
 
+_SUBSCRIPTION_SYNC_EVENTS = {
+    "subscription.create", "subscription.not_renew", "subscription.disable",
+    "invoice.payment_failed",
+}
+
+
+def _provider_status_for(event_type: str, data: dict[str, Any]) -> str | None:
+    """Map Paystack event payloads to the sync layer's provider status lexicon.
+
+    Note the documented terminal ambiguity: subscription.disable carries payload
+    status 'complete' (all cycles billed) or 'cancelled' — BOTH map to
+    'completed'/'cancelled' on our side; the sync layer records the difference."""
+    if event_type == "subscription.create":
+        return "active"
+    if event_type == "subscription.not_renew":
+        return "non-renewing"
+    if event_type == "invoice.payment_failed":
+        return "attention"
+    if event_type == "subscription.disable":
+        payload_status = str(data.get("status", "")).casefold()
+        return "completed" if payload_status in ("complete", "completed") else "cancelled"
+    return None
+
+
+async def _handle_subscription_event(
+    *,
+    session_factory,  # type: ignore[no-untyped-def]
+    event_type: str,
+    data: dict[str, Any],
+) -> PaystackWebhookResult:
+    subscription_code = (
+        data.get("subscription_code")
+        or data.get("code")
+        or (data.get("subscription", {}).get("subscription_code") if isinstance(data.get("subscription"), dict) else None)
+    )
+    if not isinstance(subscription_code, str) or not subscription_code:
+        logger.warning("Paystack webhook: %s payload has no subscription_code", event_type)
+        return PaystackWebhookResult(status="ignored", event_type=event_type, message="No subscription code")
+
+    async with AsyncSessionLocal() as session:
+        service = SubscriptionService(session)
+        synced = await service.sync_paystack_subscription({
+            "subscription_code": subscription_code,
+            "status": _provider_status_for(event_type, data) or "",
+            "next_payment_date": data.get("next_payment_date"),
+        })
+        if synced is None:
+            return PaystackWebhookResult(
+                status="ignored", event_type=event_type,
+                message=f"No local subscription for {subscription_code}",
+            )
+    return PaystackWebhookResult(
+        status="success", event_type=event_type,
+        message=f"Synced subscription {subscription_code}",
+    )
+
+
+
 class PaystackWebhookHandler:
     def __init__(self, secret_key: str, redis_client=None, session_factory=None):
         self.secret_key = secret_key
@@ -127,6 +185,12 @@ class PaystackWebhookHandler:
         data = event.get("data", {})
         if not isinstance(data, dict):
             return PaystackWebhookResult(status="ignored", event_type=event_type, message="No data object")
+
+        # P2/12: recurring lifecycle events drive SubscriptionService sync —
+        # charge.success keeps the one-off purchase path below.
+        if event_type in _SUBSCRIPTION_SYNC_EVENTS:
+            return await _handle_subscription_event(session_factory=self.session_factory,
+                                                    event_type=event_type, data=data)
 
         if event_type not in _SUPPORTED_EVENTS:
             logger.info("Paystack webhook: unsupported event %s", event_type)

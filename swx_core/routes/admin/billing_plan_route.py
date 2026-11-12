@@ -11,9 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from swx_core.database.db import SessionDep
-from swx_core.models.billing import Plan, PlanEntitlement, Feature
+from swx_core.models.billing import Plan, PlanEntitlement, Feature, Subscription
 from swx_core.auth.admin.dependencies import AdminUserDep, get_current_admin_user
 from swx_core.services.audit_logger import ActorType, AuditLogger, AuditOutcome
+from swx_core.services.billing.providers.paystack_provider import PaystackProvider
+from swx_core.services.billing.subscription_service import SubscriptionService
+from swx_core.utils.rate_limit import rate_limit_by_ip
 
 router = APIRouter(
     prefix="/admin/billing/plan",
@@ -80,3 +83,67 @@ async def assign_entitlement(
         request=request,
     )
     return {"message": "Entitlement assigned"}
+
+
+@router.post("/paystack/transactions/{reference}/verify", response_model=dict[str, object])
+@rate_limit_by_ip(max_requests=10, window_seconds=60, action="paystack_verify")
+async def admin_paystack_verify_transaction(
+    reference: str,
+    request: Request,
+    session: SessionDep,
+    _admin: AdminUserDep,
+) -> dict[str, object]:
+    """P2/14: pull-verify a transaction by reference — missed-webhook recovery."""
+    from swx_core.config.settings import settings
+
+    provider = PaystackProvider(
+        secret_key=settings.PAYSTACK_SECRET_KEY,
+        public_key=settings.PAYSTACK_PUBLIC_KEY,
+    )
+    result = await provider.verify_payment(reference)
+
+    await AuditLogger(session).log_event(
+        action="admin.paystack_transaction_verified",
+        actor_type=ActorType.ADMIN,
+        actor_id=str(_admin.id) if hasattr(_admin, "id") else None,
+        resource_type="paystack_transaction",
+        resource_id=reference,
+        outcome=AuditOutcome.SUCCESS,
+        context={"paid": result.get("paid"), "email": None},
+        request=request,
+    )
+    return result
+
+
+@router.post("/paystack/subscriptions/{code}/refresh", response_model=Subscription)
+@rate_limit_by_ip(max_requests=10, window_seconds=60, action="paystack_refresh")
+async def admin_paystack_refresh_subscription(
+    code: str,
+    request: Request,
+    session: SessionDep,
+    _admin: AdminUserDep,
+) -> Subscription:
+    """P2/14: refresh a Paystack subscription from the provider and sync state locally."""
+    from swx_core.config.settings import settings
+
+    provider = PaystackProvider(
+        secret_key=settings.PAYSTACK_SECRET_KEY,
+        public_key=settings.PAYSTACK_PUBLIC_KEY,
+    )
+    prov_status = await provider.fetch_subscription(code)
+    service = SubscriptionService(session)
+    sub_id = await service.sync_paystack_subscription(prov_status)
+    await AuditLogger(session).log_event(
+        action="admin.paystack_subscription_refreshed",
+        actor_type=ActorType.ADMIN,
+        actor_id=str(_admin.id) if hasattr(_admin, "id") else None,
+        resource_type="billing_subscription",
+        resource_id=str(sub_id) if sub_id else code,
+        outcome=AuditOutcome.SUCCESS,
+        context={"subscription_code": code, "synced": sub_id is not None},
+        request=request,
+    )
+    if sub_id is None:
+        raise HTTPException(status_code=404, detail="No local subscription matched this Paystack code")
+    refreshed = await service.get_subscription_by_id(sub_id)
+    return refreshed  # type: ignore[return-value]

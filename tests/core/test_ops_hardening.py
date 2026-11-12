@@ -168,6 +168,7 @@ class TestSecretKeyPolicy:
 
     def test_staging_with_secrets_boots(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "staging")
+        monkeypatch.setenv("SWX_OIDC_ISSUER", "https://auth.test.example.com")
         s = _fresh_settings_cls()(
             ENVIRONMENT="staging",
             SECRET_KEY="a" * 43,
@@ -178,10 +179,12 @@ class TestSecretKeyPolicy:
 
     def test_env_sourced_secrets_respected(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "staging")
+        monkeypatch.setenv("SWX_OIDC_ISSUER", "https://auth.test.example.com")
         os.environ["SECRET_KEY"] = "sourced-from-env"
         try:
             s = _fresh_settings_cls()(
                 ENVIRONMENT="staging",
+                SWX_OIDC_ISSUER="https://auth.test.example.com",
                 REFRESH_SECRET_KEY="b" * 43,
                 PASSWORD_RESET_SECRET_KEY="c" * 43,
             )

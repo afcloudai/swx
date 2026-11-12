@@ -19,6 +19,38 @@ All notable changes to this project will be documented in this file.
   `SWX_EMAIL_OTP_CHANNEL=notifications` selects it; the LoggingChannel default remains for dev.
 - `user_repository.get_user_by_phone` (verified-only, ambiguity fail-closed).
 
+## [2.33.0] - 2026-11-03
+
+### Added (P0–P4 — Paystack subscription lifecycle, AFBiz reality-check handoff)
+
+- **P0** — plan-aware `initialize_payment` passthrough shipped (2.32.0's wheel lacked
+  it; AFBiz's `ensure_paystack_plan` raised `AttributeError` at the install boundary).
+  Regression test: `plan=` reaches the `/transaction/initialize` payload.
+- **P1 plan lifecycle** — `fetch_plan`, `update_plan` (**always sends**
+  `update_existing_subscriptions=false` — Paystack silently reprices existing
+  subscribers otherwise), `enable_subscription` (code+token only; spec's stray
+  required `authorization` avoided).
+- **P1 subscription lifecycle** — `fetch_subscription` (status/next_payment_date/
+  email_token), `list_subscriptions` (numeric-ID filters, documented), `create_subscription`
+  (existing-authorization path; no first-charge at creation).
+- **P1 customer CRUD** — `create_customer`/`fetch_customer`/`update_customer`
+  (PUT has no email — email mutable in our books, immutable in theirs; rebinds key on
+  `customer_code`).
+- **P2 webhooks** — `_SUPPORTED_EVENTS` extended (`subscription.create/not_renew/disable`,
+  `invoice.create/update/payment_failed`); **durable idempotency** via
+  `swx_inbound_webhook_delivery` + Redis fast-path (`check_and_record`); user resolution by
+  `customer_code` first (email fallback only); `sync_paystack_subscription` maps
+  active/non-renewing/attention/completed/expired and wires the dormant grace machinery
+  (`handle_renewal_failure`/`expire_grace`).
+- **P3 schema** — `paystack_plan_code` + `billing_environment`, `paystack_customer_code`,
+  `paystack_subscription_code` + `paystack_email_token` (persisted for enable/disable) +
+  `managed_by` ('paystack'|'internal' — duplicate-charging contract); migrations
+  (standalone `v2_33_0` + chained `c9d1e3f5a7b9`); admin billing-plan/entitlement writes audited.
+- **P4 parity** — `MockBillingProvider` implements the full Paystack-class surface;
+  `LocalPaymentProvider` documents which methods are provider-class.
+
+**AFBiz pin: `swx-core==2.33.0`** (2.32.0's wheel predates the plan-aware provider).
+
 ## [2.31.2] - 2026-10-25
 
 ### Fixed

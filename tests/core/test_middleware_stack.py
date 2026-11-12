@@ -2,6 +2,7 @@ from swx_core.middleware.stack import (
     MiddlewareSpec,
     CANONICAL_ORDER,
     apply_middleware_stack,
+    _apply_correlation_id,
     _apply_cors,
     _apply_security_headers,
     _apply_audit,
@@ -46,7 +47,8 @@ class TestCanonicalOrder:
 
     def test_apply_functions_exist(self):
         fns = [
-            _apply_cors, _apply_security_headers, _apply_audit, _apply_logging,
+            _apply_cors, _apply_security_headers, _apply_correlation_id,
+            _apply_audit, _apply_logging,
             _apply_rate_limit, _apply_auth_rate_limit, _apply_rate_limit_headers,
             _apply_tenant, _apply_csrf, _apply_container, _apply_session,
             _apply_metrics, _apply_region_routing,

@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.32.0] - 2026-10-25
+
+### Added (D-10 — phone-first platform sessions)
+
+- **Phone/password login** — `POST /auth/phone/login`: password authentication keyed by a VERIFIED
+  phone (ambiguity fail-closed); full lockout/inactive/MFA parity with email login
+  (`POST /auth/phone/login` response contract identical, including the MFA challenge flow).
+- **Email-or-phone subjects (D-10)** — platform tokens mint `sub = user.email or user.phone`;
+  `get_current_user` resolves both subject kinds (E.164 subs fall back to a verified-phone
+  lookup); social-login completion does the same — **phone-only personas now obtain platform
+  sessions** (previously `phone_only_login_pending`).
+- **Email transport de-stub (v2.32)** — `NotificationsEmailOtpChannel` shipped and registered as
+  `notifications`: routes dual-OTP email through the REAL notification stack
+  (`send_via_email` — SMTP/SendGrid providers, circuit breakers, delivery tracking).
+  `SWX_EMAIL_OTP_CHANNEL=notifications` selects it; the LoggingChannel default remains for dev.
+- `user_repository.get_user_by_phone` (verified-only, ambiguity fail-closed).
+
+## [2.33.2] - 2026-11-03
+
+### Fixed (list-envelope double-unwrap — the real CLI crash)
+
+- **`list_plans` / `list_subscriptions` double-unwrap** — `Provider._request`
+  already unwraps Paystack's envelope (list endpoints return a LIST), but both
+  list methods called `.get("data")` on it → `'list' object has no attribute
+  'get'` against the real API (the exact CLI crash in AFBiz's
+  `ensure_paystack_plan` reuse scan; exit 2, zero rows, nothing cached).
+  Shape-tolerant now: unwrapped list (authoritative), dict envelope
+  (defensive), non-list garbage → `[]`. Root cause verified wheel-level
+  (2.32.0's provider is 83 lines/old; 2.33.0 ships the methods but with the
+  latent double-unwrap). Envelope-shape regression tests added for both
+  methods (unwrapped list + dict + empty).
+
+## [2.33.1] - 2026-11-03
+
+### Fixed (P2 completion — wiring + reconciliation)
+
+- **Subscription-event sync wiring** — `subscription.create/not_renew/disable` +
+  `invoice.payment_failed` now actually call `sync_paystack_subscription` (the
+  lifecycle method shipped in 2.33.0 but had zero callers); terminal
+  `completed`/`cancelled` ambiguity mapped per Paystack docs.
+- **Admin reconciliation endpoints (P2/14)** — `POST /admin/billing/plan/paystack/
+  transactions/{reference}/verify` (pull-verify) +
+  `POST /admin/billing/plan/paystack/subscriptions/{code}/refresh` (pull + sync) —
+  `AdminUserDep`-guarded, audited, rate-limited (missed-webhook recovery).
+- Tests: webhook sync wiring + reconciliation (6/6 green), full suite 307+.
+
+## [2.33.0] - 2026-11-03
+
+### Added (P0–P4 — Paystack subscription lifecycle, AFBiz reality-check handoff)
+
+- **P0** — plan-aware `initialize_payment` passthrough shipped (2.32.0's wheel lacked
+  it; AFBiz's `ensure_paystack_plan` raised `AttributeError` at the install boundary).
+  Regression test: `plan=` reaches the `/transaction/initialize` payload.
+- **P1 plan lifecycle** — `fetch_plan`, `update_plan` (**always sends**
+  `update_existing_subscriptions=false` — Paystack silently reprices existing
+  subscribers otherwise), `enable_subscription` (code+token only; spec's stray
+  required `authorization` avoided).
+- **P1 subscription lifecycle** — `fetch_subscription` (status/next_payment_date/
+  email_token), `list_subscriptions` (numeric-ID filters, documented), `create_subscription`
+  (existing-authorization path; no first-charge at creation).
+- **P1 customer CRUD** — `create_customer`/`fetch_customer`/`update_customer`
+  (PUT has no email — email mutable in our books, immutable in theirs; rebinds key on
+  `customer_code`).
+- **P2 webhooks** — `_SUPPORTED_EVENTS` extended (`subscription.create/not_renew/disable`,
+  `invoice.create/update/payment_failed`); **durable idempotency** via
+  `swx_inbound_webhook_delivery` + Redis fast-path (`check_and_record`); user resolution by
+  `customer_code` first (email fallback only); `sync_paystack_subscription` maps
+  active/non-renewing/attention/completed/expired and wires the dormant grace machinery
+  (`handle_renewal_failure`/`expire_grace`).
+- **P3 schema** — `paystack_plan_code` + `billing_environment`, `paystack_customer_code`,
+  `paystack_subscription_code` + `paystack_email_token` (persisted for enable/disable) +
+  `managed_by` ('paystack'|'internal' — duplicate-charging contract); migrations
+  (standalone `v2_33_0` + chained `c9d1e3f5a7b9`); admin billing-plan/entitlement writes audited.
+- **P4 parity** — `MockBillingProvider` implements the full Paystack-class surface;
+  `LocalPaymentProvider` documents which methods are provider-class.
+
+**AFBiz pin: `swx-core==2.33.0`** (2.32.0's wheel predates the plan-aware provider).
+
+## [2.31.2] - 2026-10-25
+
+### Fixed
+
+- **Root `alembic.ini`** — wires `alembic -c alembic.ini upgrade head` /
+  `swx db migrate` to the framework-owned chain
+  (`swx_core/template/project/migrations`); the framework repo no longer lacks
+  its own migration surface (reality-check finding).
+- **Refresh-token test fixtures** — the six failing
+  `tests/security/test_refresh_token_service.py` tests were stale, not
+  framework bugs: mocked the wrong repo chain (`scalar_one_or_none` vs the
+  implemented `scalars().first()/all()`) and encoded against the live settings
+  singleton instead of the patched one. Now 12/12 green — no framework change.
+
 ## [2.31.1] - 2026-10-25
 
 ### Fixed

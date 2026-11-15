@@ -600,6 +600,11 @@ def create_swx_app(
     # --- Routes ---
     if register_routes:
         app.include_router(router)
+    # Payment-provider inbound webhooks (Stripe/Paystack/Flutterwave) were
+    # never auto-mounted — register_webhook_routes was dead code.
+    from swx_core.bootstrap import register_webhook_routes
+
+    register_webhook_routes(app)
 
     # --- Bootstrap (providers, hooks, listeners) ---
     from swx_core.bootstrap import bootstrap_app

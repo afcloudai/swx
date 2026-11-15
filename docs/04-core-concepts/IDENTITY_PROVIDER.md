@@ -1,6 +1,6 @@
 # Identity Provider (OIDC)
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Last Updated:** 2026-10-25
 
 ---
@@ -54,7 +54,7 @@ never required or exposed through IdP claims).
 | `SWX_OIDC_KEY_RETIREMENT_DAYS` | `30` | Days a demoted key stays verify-only |
 | `SWX_OIDC_DEFAULT_SIGNING_ALGORITHM` | `RS256` | `RS256` or `EdDSA` |
 | `SWX_PHONE_VERIFICATION_CHANNEL` | *(none)* | Registered `PhoneVerificationChannel` name; default logs the code |
-| `SWX_EMAIL_OTP_CHANNEL` | *(none)* | Registered `EmailOtpChannel` name for the email-OTP leg; the estate plugs SMTP/SendGrid at bootstrap |
+| `SWX_EMAIL_OTP_CHANNEL` | *(none)* | Registered `EmailOtpChannel`; ship with `notifications` — routes OTP email through the REAL notification stack (SMTP/SendGrid providers, circuit-breaker, delivery tracking) |
 | `SWX_IDENTITY_REQUIRED_VERIFICATIONS` | `none` | Identity gate: `none\|phone\|email\|both` — `both` sends OTP to BOTH channels (dual delivery) and issues only when both confirm |
 
 The private keys, client secrets and encrypted fields ride the standard `SWX_ENCRYPTION_KEY` /
@@ -223,6 +223,26 @@ POST /user/identity-verification/confirm   {"channel": "email"|"phone", "code"}
 
 `SWX_IDENTITY_REQUIRED_VERIFICATIONS=both` = bank-grade onboarding: the account is issue-capable only after
 BOTH channels confirm. The gate lives in `_issue_code_and_redirect` (covers authorize + completion resume).
+
+## Phone-First Platform Sessions (D-10)
+
+```
+POST /auth/phone/login   {"phone": "+234…", "password": "…"}   → LoginResponse (MFA flow identical)
+```
+
+- Login key = the VERIFIED phone (ambiguity fail-closed); all platform tokens mint with
+  ``sub = user.email or user.phone`` — phone-only personas resolve via their verified phone.
+- ``get_current_user`` resolves both subject kinds (E.164 subs fall back to a verified-phone
+  lookup); social-login completion does the same (Stage-1 email-less personas now complete).
+- MFA: phone login participates fully (the MFA verify resolves by embedded user id).
+- Tracked backlogs: phone-only platform sessions with sub-migration for legacy email tokens
+  are additive-safe (both subject kinds resolve concurrently).
+
+## Email Transport (v2.31.1+ de-stub)
+
+``NotificationsEmailOtpChannel`` (registered by default as ``notifications``) sends OTP email
+through ``send_via_email`` — DB-configured SMTP/SendGrid providers with per-provider circuit
+breakers and delivery tracking. No more log-only default when the notification stack is configured.
 
 ## Account Recovery (D-9)
 

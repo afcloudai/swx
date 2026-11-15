@@ -198,3 +198,82 @@ class MockBillingProvider:
 
     def verify_webhook(self, payload: bytes, signature: str) -> dict[str, Any]:
         return {"type": "mock.event", "data": {}}
+
+
+    # ------------------------------------------------------------------
+    # v2.33 parity: subscription-lifecycle surface (Paystack-class methods)
+    # Mock-vs-real shape drift at the install boundary is what broke AFBiz —
+    # the mock now implements the FULL surface its real counterpart offers.
+    # ------------------------------------------------------------------
+
+    async def list_plans(self, per_page: int = 50) -> list[dict[str, Any]]:
+        return [{"id": "mock_plan_1", "name": "Mock Pro", "amount": 50000,
+                 "interval": "monthly", "currency": "NGN"}]
+
+    async def create_plan(self, name: str, amount_kobo: int, interval: str = "monthly") -> dict[str, Any]:
+        return {"id": "mock_plan_new", "name": name, "amount": amount_kobo, "interval": interval}
+
+    async def fetch_plan(self, plan_id_or_code: str) -> dict[str, Any]:
+        return {"id": plan_id_or_code, "name": "Mock Pro", "amount": 50000,
+                "interval": "monthly", "currency": "NGN"}
+
+    async def update_plan(
+        self,
+        plan_id_or_code: str,
+        name: str | None = None,
+        amount: int | None = None,
+        interval: str | None = None,
+        currency: str | None = None,
+        description: str | None = None,
+        invoice_limit: int | None = None,
+        send_invoices: bool | None = None,
+        send_sms: bool | None = None,
+    ) -> dict[str, Any]:
+        return {"id": plan_id_or_code, "status": True, "update_existing_subscriptions": False}
+
+    async def fetch_subscription(self, subscription_id_or_code: str) -> dict[str, Any]:
+        return {"id": subscription_id_or_code, "subscription_code": subscription_id_or_code,
+                "status": "active", "email_token": "mock_email_token",
+                "next_payment_date": None}
+
+    async def list_subscriptions(
+        self,
+        per_page: int = 50,
+        page: int = 1,
+        customer: int | None = None,
+        plan: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return [{"subscription_code": "mock_sub_1", "status": "active",
+                 "customer": customer, "plan": plan}]
+
+    async def enable_subscription(self, code: str, email_token: str) -> dict[str, Any]:
+        return {"code": code, "token": email_token, "enabled": True}
+
+    async def disable_subscription(self, code: str, email_token: str) -> dict[str, Any]:
+        return {"code": code, "token": email_token, "enabled": False}
+
+    async def update_customer(
+        self,
+        customer_code: str,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        phone: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"customer_code": customer_code, "status": True}
+
+    async def initialize_payment(self, amount: int, currency: str, email: str,
+                                 reference: str, callback_url: str, **kwargs: object) -> dict[str, Any]:
+        return {"authorization_url": "https://mock-checkout.example.com", "reference": reference}
+
+    def verify_webhook(self, payload: bytes, signature: str) -> dict[str, Any]:
+        return {"type": "mock.event", "data": {}}
+
+    async def verify_payment(self, reference: str) -> dict[str, Any]:
+        return {"provider": "mock", "reference": reference, "status": "success", "paid": True}
+
+    async def refund(self, reference: str, amount: int | None = None) -> dict[str, Any]:
+        return {"provider": "mock", "reference": reference, "status": "refunded"}
+
+    async def fetch_customer(self, customer_code_or_id: str) -> dict[str, Any]:
+        return {"id": customer_code_or_id, "customer_code": customer_code_or_id}

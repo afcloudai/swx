@@ -556,12 +556,13 @@ async def provider_auth_callback(request: Request, session: SessionDep, provider
             )
             is_new_user = True
 
-        if not existing_user.email:
-            # Phone-only persona: the identity exists and links by verified
-            # phone; platform session tokens are email-subject (D-10 migration).
-            return error_redirect("phone_only_login_pending")
+        if not existing_user.email and not existing_user.phone:
+            return error_redirect("missing_login_identity")
 
-        response = await complete_oauth_login(session, existing_user.email, provider, is_new_user, request)
+        # D-10: phone-only personas complete login with sub = phone.
+        login_subject = existing_user.email or existing_user.phone
+
+        response = await complete_oauth_login(session, login_subject, provider, is_new_user, request)
         clear_oauth_session(request)
         return response
 

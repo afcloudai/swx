@@ -60,6 +60,29 @@ async def authenticate_user(*, session: AsyncSession, email: str, password: str)
     return db_user
 
 
+async def get_user_by_phone(
+    session: AsyncSession,
+    phone: str,
+    *,
+    verified_only: bool = True,
+) -> User | None:
+    """
+    Resolve a user by VERIFIED phone (fail-closed on ambiguity).
+
+    Phone login trusts the phone as an identity key, so only
+    ``phone_verified_at IS NOT NULL`` rows qualify by default; if more than one
+    verified account shares the number the lookup refuses (returns None).
+    """
+    stmt = select(User).where(User.phone == phone)
+    if verified_only:
+        stmt = stmt.where(User.phone_verified_at.isnot(None))
+    result = await session.execute(stmt)
+    users = list(result.scalars().all())
+    if len(users) == 1:
+        return users[0]
+    return None
+
+
 async def get_user_by_email(*, session: AsyncSession, email: str) -> User | None:
     """Retrieve a user by email, querying the encrypted column when PII encryption is enabled."""
     logger.debug(f"Looking up user by email")

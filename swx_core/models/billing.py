@@ -85,6 +85,7 @@ class BillingAccount(Base, table=True):
     owner_id: uuid.UUID = Field(index=True) # ID of User or Team
     
     stripe_customer_id: Optional[str] = Field(default=None, unique=True, index=True)
+    paystack_customer_code: Optional[str] = Field(default=None, unique=True, index=True)
     billing_email: Optional[str] = Field(default=None)
     
     created_at: datetime = Field(
@@ -137,6 +138,14 @@ class Plan(Base, table=True):
         default=None,
         sa_column=Column(String(255), nullable=True),
     )
+    paystack_plan_code: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True, index=True),
+    )
+    billing_environment: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(16), nullable=True),
+    )  # 'test' | 'live' — provider environment; unique per (key, environment)
     amount: Optional[int] = Field(
         default=None,
         sa_column=Column(Integer, nullable=True),
@@ -222,6 +231,18 @@ class Subscription(Base, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     
+    paystack_subscription_code: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True, index=True),
+    )
+    paystack_email_token: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+    )  # needed later for enable/disable — persist, don't re-fetch
+    managed_by: str = Field(
+        default="internal",
+        sa_column=Column(String(32), nullable=False, server_default=text("'internal'")),
+    )  # 'paystack' | 'internal' — non-internal subscriptions are NEVER charged by local sweeps
     cancel_at_period_end: bool = Field(default=False)
     canceled_at: Optional[datetime] = Field(
         default=None,
